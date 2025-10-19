@@ -1,3 +1,6 @@
+# 工具链隔离
+toolchain.cmake
+
 # 编译产物目录（根据你的实际目录名调整）
 build_lab/
 build_home/
