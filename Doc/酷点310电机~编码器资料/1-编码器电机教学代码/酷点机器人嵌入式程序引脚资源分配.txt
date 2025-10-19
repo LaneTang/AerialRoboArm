@@ -1,0 +1,36 @@
+*********************************************************************************************************
+*				文件名称 : 酷点机器人嵌入式程序引脚分配				*
+*				最后修改时间：2023.7.7							*
+*   				Copyright (C), 2019-2030, 武汉酷点机器人科技有限公司			*
+*   				淘宝店铺地址：https://codbot.taobao.com/					*
+*********************************************************************************************************
+
+电机与编码器：
+MotorA：PWM: PA6(TIM3_CH1)  IN0: PC1  IN1: PC0  Encoder: PA0(TIM5_CH1) PA4(input)
+MotorB：PWM: PA7(TIM3_CH2)  IN0: PC2  IN1: PC3  Encoder: PA1(TIM5_CH2) PA5(input)
+MotorC：PWM: PB0(TIM3_CH3)  IN0: PB8  IN1: PB9  Encoder: PA2(TIM5_CH3) PC4(input)
+MotorD：PWM: PB1(TIM3_CH4)  IN0: PC11 IN1: PC10 Encoder: PA3(TIM5_CH4) PA15(input)
+
+按键：Key: PB3
+
+指示灯：LED: PC14
+
+蜂鸣器：BEEP: PC15
+
+USB转串口：Type-C: USART1_TX: PA9 USART1_RX: PA10
+
+0.96IIC屏幕：OLED: SCL: PB4 SDL: PB5
+
+通信模块：WiFi/Bluetooth: USART5_RX: PD2 USART5_TX: PC12
+
+手柄：PS2: MISO: PB14 MOSI: PB15 CLK: PB13 CS: PB12
+
+九轴陀螺仪：MPU-9250: INT: PC13 SCL: PB6 SDA: PB7
+
+CAN通信：CAN: CAN_TX: PA12 CAN_RX: PA11
+
+五路舵机：STEERING1: PC6 (TIM8_CH1)
+	 STEERING2: PC7 (TIM8_CH2)
+	 STEERING3: PC8 (TIM8_CH3)
+	 STEERING4: PC9 (TIM8_CH4)
+	 STEERING5: PA8 (TIM1_CH1)
