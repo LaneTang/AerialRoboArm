@@ -1,0 +1,5 @@
+"D:\Tool\CLion 2024.1\bin\cmake\win\x64\bin\cmake.exe" -DCMAKE_BUILD_TYPE=Debug "-DCMAKE_MAKE_PROGRAM=D:/Tool/CLion 2024.1/bin/ninja/win/x64/ninja.exe" "-DCMAKE_C_COMPILER=D:/Projects/Develop Tools/gcc-arm-none-eabi-10.3-2021.10-win32/gcc-arm-none-eabi-10.3-2021.10/bin/arm-none-eabi-gcc.exe" "-DCMAKE_CXX_COMPILER=D:/Projects/Develop Tools/gcc-arm-none-eabi-10.3-2021.10-win32/gcc-arm-none-eabi-10.3-2021.10/bin/arm-none-eabi-g++.exe" -G Ninja -S D:\Projects\Embedded_System\STM32_Projects\stm32_CLION_Proj\FPV_ctrl_demo -B D:\Projects\Embedded_System\STM32_Projects\stm32_CLION_Proj\FPV_ctrl_demo\cmake-build-debug-mingw-stm32
+-- Minimal optimization, debug info included
+-- Configuring done (0.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: D:/Projects/Embedded_System/STM32_Projects/stm32_CLION_Proj/FPV_ctrl_demo/cmake-build-debug-mingw-stm32
