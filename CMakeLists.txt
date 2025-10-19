@@ -3,6 +3,14 @@ set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_VERSION 1)
 cmake_minimum_required(VERSION 3.28)
 
+# CMakeLists.txt中添加
+if(DEFINED LOCAL_BUILD_DIR)
+    # 强制设置构建目录（仅在本地工具链文件定义了LOCAL_BUILD_DIR时生效）
+    set(CMAKE_BINARY_DIR ${LOCAL_BUILD_DIR})
+    set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR})
+    set(LIBRARY_OUTPUT_PATH ${CMAKE_BINARY_DIR})
+endif()
+
 # specify cross-compilers and tools
 set(CMAKE_C_COMPILER arm-none-eabi-gcc)
 set(CMAKE_CXX_COMPILER arm-none-eabi-g++)
@@ -81,10 +89,3 @@ add_custom_command(TARGET ${PROJECT_NAME}.elf POST_BUILD
         COMMENT "Building ${HEX_FILE}
 Building ${BIN_FILE}")
 
-# CMakeLists.txt中添加
-if(DEFINED LOCAL_BUILD_DIR)
-    # 强制设置构建目录（仅在本地工具链文件定义了LOCAL_BUILD_DIR时生效）
-    set(CMAKE_BINARY_DIR ${LOCAL_BUILD_DIR})
-    set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR})
-    set(LIBRARY_OUTPUT_PATH ${CMAKE_BINARY_DIR})
-endif()
