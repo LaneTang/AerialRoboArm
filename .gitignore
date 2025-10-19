@@ -1,0 +1,17 @@
+# 编译产物目录（根据你的实际目录名调整）
+build_lab/
+build_home/
+
+# Clion IDE的缓存文件（包含本地路径配置，不跨环境）
+.idea/
+cmake-build-*/
+*.cmake.user
+*.iws
+
+# 临时文件
+*.o
+*.elf
+*.hex
+*.bin
+*.d
+*.map

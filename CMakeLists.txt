@@ -80,3 +80,11 @@ add_custom_command(TARGET ${PROJECT_NAME}.elf POST_BUILD
         COMMAND ${CMAKE_OBJCOPY} -Obinary $<TARGET_FILE:${PROJECT_NAME}.elf> ${BIN_FILE}
         COMMENT "Building ${HEX_FILE}
 Building ${BIN_FILE}")
+
+# CMakeLists.txt中添加
+if(DEFINED LOCAL_BUILD_DIR)
+    # 强制设置构建目录（仅在本地工具链文件定义了LOCAL_BUILD_DIR时生效）
+    set(CMAKE_BINARY_DIR ${LOCAL_BUILD_DIR})
+    set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR})
+    set(LIBRARY_OUTPUT_PATH ${CMAKE_BINARY_DIR})
+endif()
