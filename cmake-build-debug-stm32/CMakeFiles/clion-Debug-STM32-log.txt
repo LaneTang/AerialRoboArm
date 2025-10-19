@@ -1,0 +1,5 @@
+D:\Embedded\STM32CubeCLT\STM32CubeCLT_1.19.0\CMake\bin\cmake.exe -DCMAKE_BUILD_TYPE=Debug -DCMAKE_MAKE_PROGRAM=D:/Embedded/STM32CubeCLT/STM32CubeCLT_1.19.0/Ninja/bin/ninja.exe -DCMAKE_C_COMPILER=D:/Embedded/STM32CubeCLT/STM32CubeCLT_1.19.0/GNU-tools-for-STM32/bin/arm-none-eabi-gcc.exe -DCMAKE_CXX_COMPILER=D:/Embedded/STM32CubeCLT/STM32CubeCLT_1.19.0/GNU-tools-for-STM32/bin/arm-none-eabi-g++.exe -G Ninja -S D:\Project\AerialRoboArm -B D:\Project\AerialRoboArm\cmake-build-debug-stm32
+-- Minimal optimization, debug info included
+-- Configuring done (0.3s)
+-- Generating done (0.0s)
+-- Build files have been written to: D:/Project/AerialRoboArm/cmake-build-debug-stm32
