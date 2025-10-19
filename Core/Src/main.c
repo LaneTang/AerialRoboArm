@@ -103,18 +103,7 @@ int main(void)
     HAL_TIM_IC_Start(&htim2, TIM_CHANNEL_1);
     HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
 
-    Motor_SetDirection(1);
-
-
-//    char ch;
-//    char buf[100];
-//    printf("Hello World!\n");
-//    printf("Input your Char");
-//    ch = getchar();
-//    printf("Your char is: %c!\n", ch);
-//    printf("Input your name: ");
-//    scanf("%s", buf);
-//    printf("Hello, %s!\n", buf);
+//    Motor_SetDirection(1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -123,17 +112,17 @@ int main(void)
   while (1)
   {
 
-    int32_t encoder_value = __HAL_TIM_GET_COUNTER(&htim4);  // 读取当前计数（signed以处理负值/反转）
-    printf("Encoder Value: %ld\r\n", encoder_value);  // 假设已配置printf到USART
-    HAL_Delay(500);  // 每500ms打印一次
+//    int32_t encoder_value = __HAL_TIM_GET_COUNTER(&htim4);  // 读取当前计数（signed以处理负值/反转）
+//    printf("Encoder Value: %ld\r\n", encoder_value);  // 假设已配置printf到USART
+//    HAL_Delay(500);  // 每500ms打印一次
+//
+//    Motor_SetDuty((i*1000));
+//
+//    i = i > 5 ? i-1 : 15;
+//
+//    printf("Hello World!\n");
 
 
-
-    Motor_SetDuty((i*1000));
-
-    i = i > 5 ? i-1 : 15;
-
-    printf("Hello World!\n");
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
