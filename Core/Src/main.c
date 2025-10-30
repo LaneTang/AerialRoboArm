@@ -26,6 +26,7 @@
 /* USER CODE BEGIN Includes */
 #include "Motor.h"
 #include "retarget.h"
+#include "MotorEncoder.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -97,10 +98,9 @@ int main(void)
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
-    HAL_TIM_IC_Start(&htim2, TIM_CHANNEL_1);
-    HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
 
-//    Motor_SetDirection(1);
+    MotorEncoder_Init(&htim4, &htim2, 898);
+//    MotorEncoder_TIM_PeriodElapsedCallback(&htim2);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -108,17 +108,14 @@ int main(void)
   int i = 10;
   while (1)
   {
+    uint32_t  position = MotorEncoder_GetPos();
+    int16_t   direction = MotorEncoder_GetDir();
+    float speed_rpm = MotorEncoder_GetSpeed();
 
-    int32_t encoder_value = __HAL_TIM_GET_COUNTER(&htim4);  // 读取当前计数（signed以处理负值/反转）
-    printf("Encoder Value: %ld\r\n", encoder_value);  // 假设已配置printf到USART
+
+    printf("Encoder Value: %ld\r\n", __HAL_TIM_GET_COUNTER(&htim4));  // 假设已配置printf到USART
+    printf("Current Motor Status: Pos=%ld; Dir=%u; Speed=%f\r\n", position, direction, speed_rpm);
     HAL_Delay(500);  // 每500ms打印一次
-//
-//    Motor_SetDuty((i*1000));
-//
-//    i = i > 5 ? i-1 : 15;
-//
-//    printf("Hello World!\n");
-
 
     /* USER CODE END WHILE */
 
