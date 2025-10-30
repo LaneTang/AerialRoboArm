@@ -79,7 +79,6 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-    RetargetInit(&huart2);
 
   /* USER CODE END Init */
 
@@ -96,8 +95,6 @@ int main(void)
   MX_TIM4_Init();
   MX_USART2_UART_Init();
   MX_TIM2_Init();
-
-
   /* USER CODE BEGIN 2 */
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
     HAL_TIM_IC_Start(&htim2, TIM_CHANNEL_1);
@@ -112,9 +109,9 @@ int main(void)
   while (1)
   {
 
-//    int32_t encoder_value = __HAL_TIM_GET_COUNTER(&htim4);  // 读取当前计数（signed以处理负值/反转）
-//    printf("Encoder Value: %ld\r\n", encoder_value);  // 假设已配置printf到USART
-//    HAL_Delay(500);  // 每500ms打印一次
+    int32_t encoder_value = __HAL_TIM_GET_COUNTER(&htim4);  // 读取当前计数（signed以处理负值/反转）
+    printf("Encoder Value: %ld\r\n", encoder_value);  // 假设已配置printf到USART
+    HAL_Delay(500);  // 每500ms打印一次
 //
 //    Motor_SetDuty((i*1000));
 //

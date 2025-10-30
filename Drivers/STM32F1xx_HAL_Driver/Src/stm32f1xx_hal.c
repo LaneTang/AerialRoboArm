@@ -34,9 +34,6 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f1xx_hal.h"
-//#include <stdio.h>
-//
-//extern UART_HandleTypeDef huart2;   //声明串口
 
 /** @addtogroup STM32F1xx_HAL_Driver
   * @{
@@ -87,31 +84,6 @@ HAL_TickFreqTypeDef uwTickFreq = HAL_TICK_FREQ_DEFAULT;  /* 1KHz */
   */
 /* Private function prototypes -----------------------------------------------*/
 /* Exported functions ---------------------------------------------------------*/
-
-///**
-//  * 函数功能: 重定向c库函数printf到DEBUG_USARTx
-//  * 输入参数: 无
-//  * 返 回 值: 无
-//  * 说    明：无
-//  */
-//int fputc(int ch, FILE *f)
-//{
-//    HAL_UART_Transmit(&huart2, (uint8_t *)&ch, 1, 0xffff);
-//    return ch;
-//}
-//
-///**
-//  * 函数功能: 重定向c库函数getchar,scanf到DEBUG_USARTx
-//  * 输入参数: 无
-//  * 返 回 值: 无
-//  * 说    明：无
-//  */
-//int fgetc(FILE *f)
-//{
-//    uint8_t ch = 0;
-//    HAL_UART_Receive(&huart2, &ch, 1, 0xffff);
-//    return ch;
-//}
 
 /** @defgroup HAL_Exported_Functions HAL Exported Functions
   * @{
