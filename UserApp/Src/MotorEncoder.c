@@ -12,7 +12,7 @@ static TIM_HandleTypeDef *henc = NULL;   // TIM4（编码器）
 static TIM_HandleTypeDef *htim_ini = NULL;   // TIM2（100ms 定时）
 
 static uint16_t cnt_last = 0;
-static float    lines_per_rev = (265.2f * 4);   // 默认四倍频，可被 Init 覆盖
+static float    lines_per_rev = (224.4f * 4);   // 默认四倍频，可被 Init 覆盖
 
 static MotorEncoder_t enc = {0};
 
@@ -50,7 +50,7 @@ float   MotorEncoder_GetSpeed(void) { return enc.speed_rpm; }
 uint32_t MotorEncoder_GetPos(void)   { return enc.position; }
 
 /* --------------------------------------------------------------
- *  TIM2 Update 中断回调（CubeMX 自动调用）
+ *  TIM2 Update 中断回调
  *  CW  - 增加计数
  *  CCW - 减少计数
  * -------------------------------------------------------------- */

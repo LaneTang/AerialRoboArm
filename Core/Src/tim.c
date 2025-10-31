@@ -321,12 +321,16 @@ void HAL_TIM_Encoder_MspDeInit(TIM_HandleTypeDef* tim_encoderHandle)
 }
 
 /* USER CODE BEGIN 1 */
-/* HAL 回调 */
+/* Sensor Data Update */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM2)
     {
+        /* 编码器测速 */
         MotorEncoder_TIM_PeriodElapsedCallback(htim);
+
+        /* 计算PID */
+        PID_Calc();
     }
 }
 /* USER CODE END 1 */

@@ -99,6 +99,9 @@ int main(void)
   /* USER CODE BEGIN 2 */
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
 
+    /* 传感器数据更新 定时器 */
+    HAL_TIM_Base_Start_IT(&htim2);
+
     MotorEncoder_Init(&htim4, &htim2, 898);
 //    MotorEncoder_TIM_PeriodElapsedCallback(&htim2);
   /* USER CODE END 2 */
