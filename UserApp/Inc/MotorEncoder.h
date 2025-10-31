@@ -16,9 +16,10 @@
  * -------------------------------------------------------------- */
 typedef struct
 {
-    volatile uint32_t  position;   // 累计脉冲数
-    volatile int16_t  direction;  // -1、0、+1
-    volatile float    speed_rpm;  // 减速后转速（rpm）
+    volatile uint32_t  position;    // 累计脉冲数
+    volatile int16_t  direction;    // -1、0、+1
+    volatile float    speed_rpm;    // 减速后转速（rpm）
+    float    angle_deg;             // 关节角度（机械映射后）
 } MotorEncoder_t;
 
 /* --------------------------------------------------------------
