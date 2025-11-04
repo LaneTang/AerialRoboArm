@@ -27,6 +27,7 @@
 #include "Motor.h"
 #include "retarget.h"
 #include "MotorEncoder.h"
+#include "JointPID.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -49,6 +50,8 @@ char RxBuffer[RXBUFFERSIZE];
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+PID_Controller_t Joint_pid;
+volatile float target_angle = 0.0f;
 
 /* USER CODE END PV */
 
@@ -111,13 +114,15 @@ int main(void)
   int i = 10;
   while (1)
   {
-    uint32_t  position = MotorEncoder_GetPos();
-    int16_t   direction = MotorEncoder_GetDir();
-    float speed_rpm = MotorEncoder_GetSpeed();
+    uint32_t  cur_position = MotorEncoder_GetPos();
+    int16_t   cur_direction = MotorEncoder_GetDir();
+    float cur_speed_rpm = MotorEncoder_GetSpeed();
+    float cur_angle = MotorEncoder_GetAngle();
 
 
     printf("Encoder Value: %ld\r\n", __HAL_TIM_GET_COUNTER(&htim4));  // 假设已配置printf到USART
-    printf("Current Motor Status: Pos=%ld; Dir=%u; Speed=%f\r\n", position, direction, speed_rpm);
+    printf("Current Motor Status: Enc_Pos=%ld; Pos=%f; Dir=%u; Speed=%f\r\n",
+                                    cur_position, cur_angle, cur_direction, cur_speed_rpm);
     HAL_Delay(500);  // 每500ms打印一次
 
     /* USER CODE END WHILE */

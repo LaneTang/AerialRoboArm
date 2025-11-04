@@ -5,13 +5,21 @@
 #include "JointPID.h"
 #include "main.h"
 
+PID_Controller_t joint_pid = {
+    .Kp = 1,
+    .Ki = 0,
+    .Kd = 0,
+    .out_min = 1000,
+    .out_max = 18000,
+    .integral_limit = 1000
+};
+
 static TIM_HandleTypeDef *hpid = NULL;   // TIM4（编码器）
 
 /* --------------------------------------------------------------
  *  初始化
  * -------------------------------------------------------------- */
-void JointPID_Init(TIM_HandleTypeDef *hpid_timer,
-                   PID_Controller_t *pidController,
+void JointPID_Init(TIM_HandleTypeDef *hpid_timer, PID_Controller_t *pid,
                    float Kp, float Ki, float Kd,
                    float out_min_val, float out_max_val)
 {
@@ -20,28 +28,24 @@ void JointPID_Init(TIM_HandleTypeDef *hpid_timer,
     /* 启动 PID 计算定时器 */
     HAL_TIM_Base_Init(hpid);
 
-    /* 参数赋值 */
-    pidController->Kp = Kp;
-    pidController->Ki = Ki;
-    pidController->Kd = Kd;
+    /* PID参数结构体 初始化 */
+    pid->Kp = Kp;
+    pid->Ki = Ki;
+    pid->Kd = Kd;
 
-    pidController->out_min = out_min_val;
-    pidController->out_max = out_max_val;
+    pid->out_min = out_min_val;
+    pid->out_max = out_max_val;
 
-    /* 状态清零 */
-    pidController->err_last  = 0.0f;
-    pidController->err_sum   = 0.0f;
-    pidController->err_diff  = 0.0f;
+
 
 }
 
-/**
- * PID计算器
- * @TIM2 Update 调用
- * @param pid
- * @param target, feedback 输入 参考值, 反馈值 - 单位为 Degree
- * @return output 输出 PWM占空比 (0 ~ 19999) -
- */
+
+
+/* --------------------------------------------------------------
+ *  PID 计算器
+ *  计算单位（Deg）
+ * -------------------------------------------------------------- */
 float PID_Calc(PID_Controller_t *pid, float target, float feedback)
 {
     float err = target - feedback;
@@ -70,7 +74,6 @@ float PID_Calc(PID_Controller_t *pid, float target, float feedback)
 
     return output;
 }
-
 
 
 
