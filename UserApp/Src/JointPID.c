@@ -11,9 +11,7 @@ PID_Controller_t joint_pid = {
     .Kd = 0,
     .out_min = 1000,
     .out_max = 18000,
-    .integral_limit = 1000,
-    .deadband = 1.0f,
-
+    .integral_limit = 1000
 };
 
 static TIM_HandleTypeDef *hpid = NULL;   // TIM4（编码器）
@@ -21,7 +19,9 @@ static TIM_HandleTypeDef *hpid = NULL;   // TIM4（编码器）
 /* --------------------------------------------------------------
  *  初始化
  * -------------------------------------------------------------- */
-void JointPID_Init(TIM_HandleTypeDef *hpid_timer, )
+void JointPID_Init(TIM_HandleTypeDef *hpid_timer, PID_Controller_t *pid,
+                   float Kp, float Ki, float Kd,
+                   float out_min_val, float out_max_val)
 {
     hpid = hpid_timer;
 
@@ -29,11 +29,18 @@ void JointPID_Init(TIM_HandleTypeDef *hpid_timer, )
     HAL_TIM_Base_Init(hpid);
 
     /* PID参数结构体 初始化 */
-    if (pid_param != NULL) joint_pid = *pid_param;
+    pid->Kp = Kp;
+    pid->Ki = Ki;
+    pid->Kd = Kd;
+
+    pid->out_min = out_min_val;
+    pid->out_max = out_max_val;
 
 
 
 }
+
+
 
 /* --------------------------------------------------------------
  *  PID 计算器
@@ -67,6 +74,7 @@ float PID_Calc(PID_Controller_t *pid, float target, float feedback)
 
     return output;
 }
+
 
 
 

@@ -30,10 +30,19 @@ void Motor_SetDirection(int8_t dir) {
 
 }
 
+
 void Motor_SetDuty(uint32_t pwm_val) { // 0 ~ 19999
     if (pwm_val >= 19999) pwm_val = 19999;
     else if (pwm_val <= 0) pwm_val = 0;
 
     __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_2, pwm_val);
-
 }
+
+
+void Motor_SetSpeed(float target_rpm)
+{
+    uint32_t target_pwm = (target_rpm)
+}
+
+
+

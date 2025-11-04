@@ -9,7 +9,6 @@ typedef struct {
     float Kp, Ki, Kd;
     float err_last, err_sum, err_diff;
     float out_max, out_min;
-    float deadband;     // 死区
     float integral_limit;
 }PID_Controller_t;
 

@@ -326,7 +326,12 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM2)
     {
+        // 编码器测速
         MotorEncoder_TIM_PeriodElapsedCallback(htim);
+
+        // PID计算
+
+
     }
 }
 /* USER CODE END 1 */
