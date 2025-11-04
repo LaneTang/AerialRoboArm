@@ -3,8 +3,6 @@
 //
 
 #include "MotorEncoder.h"
-#include "Motor.h"
-#include <string.h>
 
 /* --------------------------------------------------------------
  *  内部静态变量
@@ -21,14 +19,13 @@ static MotorEncoder_t enc = {0};
  *  初始化
  * -------------------------------------------------------------- */
 void MotorEncoder_Init(TIM_HandleTypeDef *htim_encoder,
-                       TIM_HandleTypeDef *htim_timer,
-                       float lines_per_rev_user)
+                       TIM_HandleTypeDef *htim_timer)
 {
     henc = htim_encoder;
     htim_ini = htim_timer;
-
-    if (lines_per_rev_user > 0.0f)
-        lines_per_rev = lines_per_rev_user;
+//
+//    if (lines_per_rev_user > 0.0f)
+//        lines_per_rev = lines_per_rev_user;
 
     /* 启动编码器接口 */
     HAL_TIM_Encoder_Start(henc, TIM_CHANNEL_ALL);
@@ -52,7 +49,8 @@ float   MotorEncoder_GetAngle(void) { return enc.angle_deg; }
 uint32_t MotorEncoder_GetPos(void)   { return enc.position; }
 
 /* --------------------------------------------------------------
- *  TIM2 Update 中断回调（CubeMX 自动调用）
+ *  编码器测速 中断回调函数
+ *  TIM2
  *  CW  - 增加计数
  *  CCW - 减少计数
  * -------------------------------------------------------------- */
@@ -68,7 +66,7 @@ void MotorEncoder_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     /* ---------- 2) 更新累计位置 ---------- */
     enc.position += delta_pos;
 
-    /* ---------- 4) 转换角度 ---------- */
+    /* ---------- 3) 转换角度 ---------- */
     enc.angle_deg = (float )(delta_pos * 360) / lines_per_rev ;
 
     /* ---------- 4) 方向 ---------- */
@@ -95,10 +93,8 @@ static uint32_t     homing_start_tick = 0;
 static float        homing_target_rpm = 0.0f;
 static HomingState_t homing_state = HOMING_IDLE;
 
-HomingState_t MotorEncoder_Homing_Start(
-        GPIO_TypeDef *hall_port, uint16_t hall_pin,
-        float homing_speed_rpm,
-        uint32_t timeout_ms)
+HomingState_t MotorEncoder_Homing_Start(GPIO_TypeDef *hall_port, uint16_t hall_pin,
+        float homing_speed_rpm, uint32_t timeout_ms)
 {
     if (homing_state != HOMING_IDLE) {
         return homing_state;  // 正在调零中

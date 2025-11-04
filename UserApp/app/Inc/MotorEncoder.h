@@ -7,16 +7,15 @@
 
 #include "stm32f1xx_hal.h"
 #include "main.h"
-
-#include "stm32f1xx_hal.h"
+#include "Motor.h"
 #include <stdint.h>
+#include <string.h>
+
 
 /* --------------------------------------------------------------
  *  编码器参数宏定义
  * -------------------------------------------------------------- */
-#define ENCODER_LINE_COUNT 11
-#define REDUCTION_RATIO 20.4
-#define PULSE_PER_REVOLUTION (ENCODER_LINE_COUNT*REDUCTION_RATIO)
+
 
 /* --------------------------------------------------------------
  *  对外结构体（中断安全，volatile 防止编译器优化）
@@ -52,8 +51,7 @@ HomingState_t MotorEncoder_GetHomingState(void);
  *  公共 API
  * -------------------------------------------------------------- */
 void MotorEncoder_Init(TIM_HandleTypeDef *htim_encoder,
-                       TIM_HandleTypeDef *htim_timer,
-                       float lines_per_rev);   // 例如 265.2f
+                       TIM_HandleTypeDef *htim_timer);   // 例如 265.2f
 
 int16_t MotorEncoder_GetDir(void);
 float   MotorEncoder_GetSpeed(void);
@@ -61,7 +59,7 @@ float   MotorEncoder_GetAngle(void);
 uint32_t MotorEncoder_GetPos(void);
 
 
-/* 供 HAL 中断回调使用（CubeMX 生成的函数） */
+/* TIM2 编码器测速 中断回调函数 */
 void MotorEncoder_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim);
 
 #endif //FPV_CTRL_DEMO_MotorEncoder_H

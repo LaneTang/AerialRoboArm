@@ -2,12 +2,8 @@
 // Created by User on 2025/10/17.
 //
 
-#include "Motor.h"
+#include "../Inc/Motor.h"
 #include "tim.h"
-
-// 全局变量用于速度计算
-int32_t last_cnt = 0;
-uint32_t last_time = 0;
 
 
 /**
@@ -38,11 +34,6 @@ void Motor_SetDuty(uint32_t pwm_val) { // 0 ~ 19999
     __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_2, pwm_val);
 }
 
-
-void Motor_SetSpeed(float target_rpm)
-{
-    uint32_t target_pwm = (target_rpm)
-}
 
 
 

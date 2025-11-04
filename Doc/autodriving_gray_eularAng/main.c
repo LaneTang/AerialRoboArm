@@ -35,7 +35,7 @@
 #include "ti_msp_dl_config.h"
 #include "Serial.h"
 #include "Track.h"
-#include "Motor.h"
+#include "../../UserApp/bsp/Inc/Motor.h"
 #include "oled.h"
 #include "math.h"
 

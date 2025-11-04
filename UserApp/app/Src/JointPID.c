@@ -3,16 +3,7 @@
 //
 
 #include "JointPID.h"
-#include "main.h"
 
-PID_Controller_t joint_pid = {
-    .Kp = 1,
-    .Ki = 0,
-    .Kd = 0,
-    .out_min = 1000,
-    .out_max = 18000,
-    .integral_limit = 1000
-};
 
 static TIM_HandleTypeDef *hpid = NULL;   // TIM4（编码器）
 
@@ -21,14 +12,14 @@ static TIM_HandleTypeDef *hpid = NULL;   // TIM4（编码器）
  * -------------------------------------------------------------- */
 void JointPID_Init(TIM_HandleTypeDef *hpid_timer, PID_Controller_t *pid,
                    float Kp, float Ki, float Kd,
-                   float out_min_val, float out_max_val)
+                   float out_min_val, float out_max_val, float integral_lim)
 {
     hpid = hpid_timer;
 
     /* 启动 PID 计算定时器 */
     HAL_TIM_Base_Init(hpid);
 
-    /* PID参数结构体 初始化 */
+    /* PID参数 初始化 */
     pid->Kp = Kp;
     pid->Ki = Ki;
     pid->Kd = Kd;
@@ -36,15 +27,43 @@ void JointPID_Init(TIM_HandleTypeDef *hpid_timer, PID_Controller_t *pid,
     pid->out_min = out_min_val;
     pid->out_max = out_max_val;
 
+    pid->integral_limit = integral_lim;
 
+    pid->err_sum = 0.0f;
+    pid->err_last = 0.0f;
+    pid->err_diff = 0.0f;
 
 }
 
+void JointPID_Config_Init(TIM_HandleTypeDef *hpid_timer,
+                          PID_Controller_t *pid, PID_Config_t *pid_cfg)
+{
+    hpid = hpid_timer;
+
+    /* 启动 PID 计算定时器 */
+    HAL_TIM_Base_Init(hpid);
+
+    /* PID参数结构体 初始化 */
+    pid->Kp = pid_cfg->Kp;
+    pid->Ki = pid_cfg->Ki;
+    pid->Kd = pid_cfg->Kd;
+
+    pid->out_min = pid_cfg->out_min;
+    pid->out_max = pid_cfg->out_max;
+
+    pid->integral_limit = pid_cfg->integral_limit;
+
+    pid->err_sum = 0.0f;
+    pid->err_last = 0.0f;
+    pid->err_diff = 0.0f;
+
+}
 
 
 /* --------------------------------------------------------------
  *  PID 计算器
  *  计算单位（Deg）
+ *  输出值带方向，需要甄别
  * -------------------------------------------------------------- */
 float PID_Calc(PID_Controller_t *pid, float target, float feedback)
 {
@@ -75,6 +94,35 @@ float PID_Calc(PID_Controller_t *pid, float target, float feedback)
     return output;
 }
 
+/* --------------------------------------------------------------
+ *  PID Control 中断回调函数
+ *  TIM2
+ * -------------------------------------------------------------- */
+void PID_Control_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim,
+                                           PID_Controller_t *pid,
+                                           float target)
+{
+    if(htim != hpid) return;
+
+    /* 1. 读取电机角度 */
+    float cur_angle = MotorEncoder_GetAngle();
+
+    /* 2. 计算PID */
+    float pid_out_pwm = PID_Calc(pid, target, cur_angle);
+
+    /* 3. 输出合法化 */
+    int8_t dir = 1;
+    if (pid_out_pwm < 0) {
+        dir = -1;
+        pid_out_pwm = -pid_out_pwm;
+    }
+    uint32_t pwm_new = (uint32_t )pid_out_pwm;
+
+    /* 4. 写入PWM */
+    Motor_SetDirection(dir);
+    Motor_SetDuty(pwm_new);
+
+}
 
 
 

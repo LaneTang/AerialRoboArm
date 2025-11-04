@@ -24,7 +24,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "Motor.h"
+#include "../../UserApp/bsp/Inc/Motor.h"
 #include "retarget.h"
 #include "MotorEncoder.h"
 #include "JointPID.h"
@@ -51,8 +51,16 @@ char RxBuffer[RXBUFFERSIZE];
 
 /* USER CODE BEGIN PV */
 PID_Controller_t Joint_pid;
-volatile float target_angle = 0.0f;
+volatile float target_angle_deg = 90.0f;
 
+PID_Config_t Joint_pid_cfg = {
+        .Kp = 1,
+        .Ki = 0,
+        .Kd = 0,
+        .out_min = 100,
+        .out_max = 18000,
+        .integral_limit = 1000
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -102,11 +110,13 @@ int main(void)
   /* USER CODE BEGIN 2 */
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
 
-    /* 传感器数据更新 定时器 */
+    /* 反馈定时器 */
     HAL_TIM_Base_Start_IT(&htim2);
 
-    MotorEncoder_Init(&htim4, &htim2, 898);
-//    MotorEncoder_TIM_PeriodElapsedCallback(&htim2);
+    //
+    MotorEncoder_Init(&htim4, &htim2);
+
+    JointPID_Config_Init(&htim2, &Joint_pid, &Joint_pid_cfg);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -121,7 +131,7 @@ int main(void)
 
 
     printf("Encoder Value: %ld\r\n", __HAL_TIM_GET_COUNTER(&htim4));  // 假设已配置printf到USART
-    printf("Current Motor Status: Enc_Pos=%ld; Pos=%f; Dir=%u; Speed=%f\r\n",
+    printf("Current Motor Status: Enc_Pos=%ld; Ang_Pos=%f; Dir=%u; Speed=%f\r\n",
                                     cur_position, cur_angle, cur_direction, cur_speed_rpm);
     HAL_Delay(500);  // 每500ms打印一次
 
@@ -173,6 +183,20 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 
+/* 定时器更新中断回调 */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM2)
+    {
+        // 编码器测速
+        MotorEncoder_TIM_PeriodElapsedCallback(htim);
+
+        // PID 控制
+        PID_Control_TIM_PeriodElapsedCallback(htim, &Joint_pid, target_angle_deg);
+
+
+    }
+}
 /* USER CODE END 4 */
 
 /**
