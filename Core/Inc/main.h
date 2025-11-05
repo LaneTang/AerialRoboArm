@@ -36,6 +36,12 @@ extern "C" {
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
+typedef enum{
+    RX_IDLE = 0,
+    RX_INIT,
+    RX_MOTOR_STOP,
+    RX_ENCODER_ZERO_ADJUSTMENT
+}Rx_State;
 
 /* USER CODE END ET */
 

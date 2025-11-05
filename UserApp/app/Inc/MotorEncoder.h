@@ -29,7 +29,12 @@ typedef struct
 } MotorEncoder_t;
 
 /* --------------------------------------------------------------
- *  新增：调零函数
+ *  调零参数定义
+ * -------------------------------------------------------------- */
+#define HOMING_LOW_PWM_DUTY (1000) // 5% 占空比，低速调零
+
+/* --------------------------------------------------------------
+ * Homing 状态定义
  * -------------------------------------------------------------- */
 typedef enum {
     HOMING_IDLE,
@@ -39,13 +44,15 @@ typedef enum {
     HOMING_FAILED
 } HomingState_t;
 
-HomingState_t MotorEncoder_Homing_Start(
-        GPIO_TypeDef *hall_port, uint16_t hall_pin,
-        float homing_speed_rpm,      // 建议 10~30 RPM
-        uint32_t timeout_ms          // 超时保护
-);
+// Homing Start API
+HomingState_t MotorEncoder_Homing_Start(float homing_speed_rpm,
+                                        uint32_t timeout_ms);
 
-HomingState_t MotorEncoder_GetHomingState(void);
+// Homing State Check API
+HomingState_t MotorEncoder_CheckHomingState(uint32_t timeout_ms);
+
+// EXTI 外部中断回调中调用的函数
+void MotorEncoder_HOMING_EXTI_Callback(void);
 
 /* --------------------------------------------------------------
  *  公共 API
@@ -60,6 +67,6 @@ uint32_t MotorEncoder_GetPos(void);
 
 
 /* TIM2 编码器测速 中断回调函数 */
-void MotorEncoder_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim);
+void MotorEncoder_Sensor_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim);
 
 #endif //FPV_CTRL_DEMO_MotorEncoder_H

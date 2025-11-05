@@ -14,5 +14,6 @@
 
 void Motor_SetDirection(int8_t dir);
 void Motor_SetDuty(uint32_t pwm_val);
+void Motor_Stop(void);
 
 #endif //FPV_CTRL_DEMO_MOTOR_H

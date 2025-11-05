@@ -10,7 +10,7 @@
 static TIM_HandleTypeDef *henc = NULL;   // TIM4（编码器）
 static TIM_HandleTypeDef *htim_ini = NULL;   // TIM2（100ms 定时）
 
-static uint16_t cnt_last = 0;
+static uint16_t volatile cnt_last = 0;   // 测速用
 static float    lines_per_rev = ((float)PULSE_PER_REVOLUTION * 4);   // 默认四倍频，可被 Init 覆盖
 
 static MotorEncoder_t enc = {0};
@@ -54,27 +54,28 @@ uint32_t MotorEncoder_GetPos(void)   { return enc.position; }
  *  CW  - 增加计数
  *  CCW - 减少计数
  * -------------------------------------------------------------- */
-void MotorEncoder_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+void MotorEncoder_Sensor_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim != htim_ini) return;   // 防止误入
 
     uint16_t cnt_now = __HAL_TIM_GET_COUNTER(henc);
 
-    /* ---------- 1) 获取位置差值 ---------- */
+    /* ---------- 1) 获取位置差值 并 更新累计位置 ---------- */
     int32_t delta_pos = (cnt_now - cnt_last);
 
-    /* ---------- 2) 更新累计位置 ---------- */
     enc.position += delta_pos;
 
-    /* ---------- 3) 转换角度 ---------- */
-    enc.angle_deg = (float )(delta_pos * 360) / lines_per_rev ;
+    /* ---------- 2) 转换角度 并 更新累计角度 ---------- */
+    float delta_angle = (float)delta_pos * 360.0f / lines_per_rev;
 
-    /* ---------- 4) 方向 ---------- */
+    enc.angle_deg += delta_angle;
+
+    /* ---------- 3) 方向 ---------- */
     if (delta_pos > 0)      enc.direction =  1;
     else if (delta_pos < 0) enc.direction = -1;
     else                    enc.direction =  0;
 
-    /* ---------- 5) 转速 (rpm) ---------- */
+    /* ---------- 4) 转速 (rpm) ---------- */
     /* Δcnt 为 100ms 内脉冲数，×10 → 每秒脉冲数 */
     float pulses_per_sec = (float)delta_pos * 10.0f;
     enc.speed_rpm = pulses_per_sec / lines_per_rev;   // 减速后 rpm
@@ -86,29 +87,69 @@ void MotorEncoder_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 /* --------------------------------------------------------------
  *  内部静态变量（调零用）
  * -------------------------------------------------------------- */
-static GPIO_TypeDef *hall_gpio_port = NULL;
-static uint16_t     hall_gpio_pin  = 0;
-
 static uint32_t     homing_start_tick = 0;
 static float        homing_target_rpm = 0.0f;
+static uint32_t     timeout = 10000;
 static HomingState_t homing_state = HOMING_IDLE;
 
-HomingState_t MotorEncoder_Homing_Start(GPIO_TypeDef *hall_port, uint16_t hall_pin,
-        float homing_speed_rpm, uint32_t timeout_ms)
+HomingState_t MotorEncoder_Homing_Start(float homing_speed_rpm, uint32_t timeout_ms)
 {
-    if (homing_state != HOMING_IDLE) {
-        return homing_state;  // 正在调零中
+    if (homing_state != HOMING_IDLE && homing_state != HOMING_SUCCESS) {
+        return homing_state;  // 正在调零中或未重置
     }
 
-    /* 保存参数 */
-    hall_gpio_port = hall_port;
-    hall_gpio_pin  = hall_pin;
-    homing_target_rpm = -homing_speed_rpm;  // 反转（负值）
+    // 启动调零状态
+    homing_state = HOMING_RUNNING;
     homing_start_tick = HAL_GetTick();
 
-    /* 启动反转 */
-    Motor_SetSpeed(homing_target_rpm);
+    /* 转速映射 */
+//    homing_target_rpm = -homing_speed_rpm;  // 反转（负值）
 
-    homing_state = HOMING_RUNNING;
+    /* 启动反转 */
+    Motor_SetDirection(-1); // 假设 -1 为向零点方向
+    // 但是现在没有速度对pwm的映射，怎么办呢，直接乱设置一个速度好了
+    Motor_SetDuty(HOMING_LOW_PWM_DUTY); // 使用固定的低速 PWM
+
     return HOMING_RUNNING;
+
+}
+
+HomingState_t MotorEncoder_CheckHomingState(uint32_t timeout_ms)
+{
+    if (homing_state != HOMING_RUNNING) {
+        return homing_state;
+    }
+
+    /* 超时保护 */
+    if (HAL_GetTick() - homing_start_tick > timeout_ms) {
+        Motor_Stop();
+        homing_state = HOMING_TIMEOUT;
+        return HOMING_TIMEOUT;
+    }
+
+    return homing_state;
+}
+
+void MotorEncoder_HOMING_EXTI_Callback(void)
+{
+    // 只有在 HOMING_RUNNING 状态下触发才有效
+    if (homing_state != HOMING_RUNNING) {
+        return;
+    }
+
+    /* 1. 立即停止电机 */
+    Motor_Stop(); // 假设 Motor_Stop() 清零所有 PWM 占空比
+
+    /* 2. 重置编码器计数 */
+    __HAL_TIM_SET_COUNTER(henc, 0); // 定时器计数值清零
+    cnt_last = 0;                  // 测速用的上次计数值清零
+
+    /* 3. 重置结构体累计值 */
+    enc.position = 0;
+    enc.angle_deg = 0.0f;
+    enc.direction = 0;
+    enc.speed_rpm = 0.0f;
+
+    /* 4. 更新状态 */
+    homing_state = HOMING_SUCCESS;
 }

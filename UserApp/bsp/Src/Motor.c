@@ -35,5 +35,12 @@ void Motor_SetDuty(uint32_t pwm_val) { // 0 ~ 19999
 }
 
 
+void Motor_Stop(void)
+{
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_RESET);
+    __HAL_TIM_SetCompare(&htim1, TIM_CHANNEL_2, 0);
+}
+
 
 
