@@ -67,6 +67,7 @@ void JointPID_Config_Init(TIM_HandleTypeDef *hpid_timer,
  * -------------------------------------------------------------- */
 float PID_Calc(PID_Controller_t *pid, float target, float feedback)
 {
+    /* 比例环节 */
     float err = target - feedback;
 
     /* 积分环节 */
@@ -121,6 +122,8 @@ void PID_Control_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim,
     /* 4. 写入PWM */
     Motor_SetDirection(dir);
     Motor_SetDuty(pwm_new);
+
+
 
 }
 

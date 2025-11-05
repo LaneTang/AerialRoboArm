@@ -10,6 +10,8 @@
 #include "Motor.h"
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
+
 
 
 /* --------------------------------------------------------------
@@ -22,22 +24,22 @@
  * -------------------------------------------------------------- */
 typedef struct
 {
-    volatile uint32_t  position;    // 累计脉冲数
-    volatile int8_t  direction;    // -1、0、+1
-    volatile float    speed_rpm;    // 减速后转速（rpm）
+    volatile uint32_t   position;    // 累计脉冲数
+    volatile int        direction;     // -1、0、+1
+    volatile float      speed_rpm;    // 减速后转速（rpm）
     float    angle_deg;             // 关节角度（机械映射后）
 } MotorEncoder_t;
 
 /* --------------------------------------------------------------
  *  调零参数定义
  * -------------------------------------------------------------- */
-#define HOMING_LOW_PWM_DUTY (1000) // 5% 占空比，低速调零
+#define HOMING_LOW_PWM_DUTY (2000   ) // 10% 占空比，低速调零
 
 /* --------------------------------------------------------------
  * Homing 状态定义
  * -------------------------------------------------------------- */
 typedef enum {
-    HOMING_IDLE,
+    HOMING_IDLE = 0,
     HOMING_RUNNING,
     HOMING_SUCCESS,
     HOMING_TIMEOUT,
@@ -52,7 +54,7 @@ HomingState_t MotorEncoder_Homing_Start(float homing_speed_rpm,
 HomingState_t MotorEncoder_CheckHomingState(uint32_t timeout_ms);
 
 // EXTI 外部中断回调中调用的函数
-void MotorEncoder_HOMING_EXTI_Callback(void);
+void MotorEncoder_HOMED_EXTI_Callback(void);
 
 /* --------------------------------------------------------------
  *  公共 API
@@ -60,7 +62,7 @@ void MotorEncoder_HOMING_EXTI_Callback(void);
 void MotorEncoder_Init(TIM_HandleTypeDef *htim_encoder,
                        TIM_HandleTypeDef *htim_timer);   // 例如 265.2f
 
-int16_t MotorEncoder_GetDir(void);
+int     MotorEncoder_GetDir(void);
 float   MotorEncoder_GetSpeed(void);
 float   MotorEncoder_GetAngle(void);
 uint32_t MotorEncoder_GetPos(void);

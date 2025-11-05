@@ -51,26 +51,30 @@ char RxBuffer[RXBUFFERSIZE];
 
 /* USER CODE BEGIN PV */
 PID_Controller_t Joint_pid;
-volatile float target_angle_deg = 90.0f;
+volatile float target_angle_deg = 75.0f;
 
 PID_Config_t Joint_pid_cfg = {
-        .Kp = 1,
-        .Ki = 0,
+        .Kp = 80,
+        .Ki = 10,
         .Kd = 0,
         .out_min = 100,
         .out_max = 18000,
         .integral_limit = 1000
 };
 
+// pid 启动flag
+int homing_flag = 1;
+int pid_flag = 0;
+
 #define BUFF_MAX_SIZE 255
-typedef struct usartRecvType{
-    char recvData;	// 接收数据
-    char recvBuff[BUFF_MAX_SIZE];  // 接收数据的缓冲区
-    uint8_t recvFlag; // 成功接收一包数据的标志位
-    Rx_State recvState;
-    uint16_t recvNum; // 接收数据的字节数
-} usartRecvType_t;
-usartRecvType_t uart2_Recv = {0};
+//typedef struct usartRecvType{
+//    char recvData;	// 接收数据
+//    char recvBuff[BUFF_MAX_SIZE];  // 接收数据的缓冲区
+//    uint8_t recvFlag; // 成功接收一包数据的标志位
+//    Rx_State recvState;
+//    uint16_t recvNum; // 接收数据的字节数
+//} usartRecvType_t;
+//usartRecvType_t uart2_Recv = {0};
 
 /* USER CODE END PV */
 
@@ -119,35 +123,62 @@ int main(void)
   MX_USART2_UART_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-    HAL_UART_Receive_IT(&huart2, (uint8_t* )&uart2_Recv.recvData, 1);
+    /* 串口指令接收中断 */
+//    HAL_UART_Receive_IT(&huart2, (uint8_t* )&uart2_Recv.recvData, 1);
 
+    /* Motor PWM 初始化 */
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
 
-    /* 反馈定时器 */
+    /* sensor update TIMER */
     HAL_TIM_Base_Start_IT(&htim2);
 
-    //
+    /* 编码器初始化 */
     MotorEncoder_Init(&htim4, &htim2);
 
+    /* PID 初始化 */
     JointPID_Config_Init(&htim2, &Joint_pid, &Joint_pid_cfg);
+
+    // homing test
+    MotorEncoder_Homing_Start(0, 100000);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-
-
+    int i = 10;
     while (1)
     {
-        printf("Encoder Value: %ld\r\n", __HAL_TIM_GET_COUNTER(&htim4));  // 假设已配置printf到USART
-        printf("Current Motor Status: Enc_Pos=%ld; Ang_Pos=%f; Dir=%u; Speed=%f\r\n",
+        // Encoder test
+        printf("MotSt. enc=%ld; ang=%f; dir=%d; vel=%f, cur_pwm=%d\r\n",
                         MotorEncoder_GetPos(), MotorEncoder_GetAngle(),
-                        MotorEncoder_GetDir(), MotorEncoder_GetSpeed());
-        HAL_Delay(500);  // 每500ms打印一次
+                        MotorEncoder_GetDir(), MotorEncoder_GetSpeed(),
+                        __HAL_TIM_GET_COUNTER(&htim1));
+
+        // switch test
+//        printf("general Testing\r\n");
+        printf("HomSt.=%d\r\n", MotorEncoder_CheckHomingState(100000));
+
+
+        //
+        if (homing_flag && MotorEncoder_CheckHomingState(100000) == HOMING_SUCCESS) {
+            // 启动 PID, 设置 target_angle
+            target_angle_deg = 60.0f;
+            printf("PID go go go \r\n");
+            pid_flag = 1;
+            homing_flag = 0;
+
+            HAL_Delay(500);
+
+        }
+
+
+        HAL_Delay(500);  // 每500ms 一次
 
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
     }
+
   /* USER CODE END 3 */
 }
 
@@ -192,6 +223,8 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 
+#define HALL_LIMIT_SWITCH_Pin GPIO_PIN_8
+
 /**
  * @brief EXTI line detection callbacks
  * @param GPIO_Pin: Specifies the pins connected EXTI line
@@ -199,13 +232,15 @@ void SystemClock_Config(void)
  */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-    // 假设您的限位开关连接在 EXTI Line 对应的 Pin 上
-    if (GPIO_Pin == HALL_LIMIT_SWITCH_Pin) // 替换为您的限位开关引脚宏定义
+    // 霍尔编码器 连接在 EXTI Line 对应的 Pin 上
+    if (GPIO_Pin == GPIO_PIN_8) // 限位开关引脚宏定义
     {
-        MotorEncoder_HOMING_EXTI_Callback();
+        printf("检测到零点信号\r\n");
+
+        MotorEncoder_HOMED_EXTI_Callback();
         // 如果是二次回零，这里可能需要更复杂的逻辑，例如先停止，再进入二次搜索状态
+
     }
-    // ... 其他 EXTI 处理
 }
 
 
@@ -215,38 +250,38 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
  * @param huart
  * @FSM usart_state
  */
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-    if(huart->Instance == USART2)
-    {
-        // 判断包头
-        static uint8_t usart_state = 0;
-        if (uart2_Recv.recvData == '#') {
-            usart_state = 1;
-        }
-        // 判断包尾 并 解析指令
-        else if (usart_state == 1 && uart2_Recv.recvData == '&') {
-            usart_state = 0;
-            uart2_Recv.recvFlag = 1;    // 接收成功标志位
-            if (strcmp(uart2_Recv.recvBuff, "INIT") == 0) {
-                uart2_Recv.recvState = RX_INIT;
-            }
-            else if (strcmp(uart2_Recv.recvBuff, "MOTOR_STOP") == 0) {
-                uart2_Recv.recvState = RX_MOTOR_STOP;
-            }
-            else if (strcmp(uart2_Recv.recvBuff, "ZERO_ADJUSTMENT") == 0) {
-                uart2_Recv.recvState = RX_ENCODER_ZERO_ADJUSTMENT;
-            }
-        }
-        else if (usart_state == 1) {
-            uart2_Recv.recvBuff[uart2_Recv.recvNum++] = uart2_Recv.recvData;
-
-        }
-
-        HAL_UART_Receive_IT(&huart2, (uint8_t* )&uart2_Recv.recvData, 1);
-
-    }
-}
+//void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+//{
+//    if(huart->Instance == USART2)
+//    {
+//        // 判断包头
+//        static uint8_t usart_state = 0;
+//        if (uart2_Recv.recvData == '#') {
+//            usart_state = 1;
+//        }
+//        // 判断包尾 并 解析指令
+//        else if (usart_state == 1 && uart2_Recv.recvData == '&') {
+//            usart_state = 0;
+//            uart2_Recv.recvFlag = 1;    // 接收成功标志位
+//            if (strcmp(uart2_Recv.recvBuff, "INIT") == 0) {
+//                uart2_Recv.recvState = RX_INIT;
+//            }
+//            else if (strcmp(uart2_Recv.recvBuff, "MOTOR_STOP") == 0) {
+//                uart2_Recv.recvState = RX_MOTOR_STOP;
+//            }
+//            else if (strcmp(uart2_Recv.recvBuff, "ZERO_ADJUSTMENT") == 0) {
+//                uart2_Recv.recvState = RX_ENCODER_ZERO_ADJUSTMENT;
+//            }
+//        }
+//        else if (usart_state == 1) {
+//            uart2_Recv.recvBuff[uart2_Recv.recvNum++] = uart2_Recv.recvData;
+//
+//        }
+//
+//        HAL_UART_Receive_IT(&huart2, (uint8_t* )&uart2_Recv.recvData, 1);
+//
+//    }
+//}
 
 
 /* 定时器更新中断回调 */
@@ -258,7 +293,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         MotorEncoder_Sensor_TIM_PeriodElapsedCallback(htim);
 
         // PID 控制
-        PID_Control_TIM_PeriodElapsedCallback(htim, &Joint_pid, target_angle_deg);
+        if (pid_flag) {
+            PID_Control_TIM_PeriodElapsedCallback(htim, &Joint_pid, target_angle_deg);
+        }
 
 
     }

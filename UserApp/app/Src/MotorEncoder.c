@@ -43,7 +43,7 @@ void MotorEncoder_Init(TIM_HandleTypeDef *htim_encoder,
 /* --------------------------------------------------------------
  *  对外 API
  * -------------------------------------------------------------- */
-int16_t MotorEncoder_GetDir(void)   { return enc.direction; }
+int MotorEncoder_GetDir(void)   { return enc.direction; }
 float   MotorEncoder_GetSpeed(void) { return enc.speed_rpm; }
 float   MotorEncoder_GetAngle(void) { return enc.angle_deg; }
 uint32_t MotorEncoder_GetPos(void)   { return enc.position; }
@@ -61,7 +61,7 @@ void MotorEncoder_Sensor_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     uint16_t cnt_now = __HAL_TIM_GET_COUNTER(henc);
 
     /* ---------- 1) 获取位置差值 并 更新累计位置 ---------- */
-    int32_t delta_pos = (cnt_now - cnt_last);
+    int32_t delta_pos = (int16_t)cnt_now - (int16_t)cnt_last;
 
     enc.position += delta_pos;
 
@@ -106,7 +106,7 @@ HomingState_t MotorEncoder_Homing_Start(float homing_speed_rpm, uint32_t timeout
 //    homing_target_rpm = -homing_speed_rpm;  // 反转（负值）
 
     /* 启动反转 */
-    Motor_SetDirection(-1); // 假设 -1 为向零点方向
+    Motor_SetDirection(-1);
     // 但是现在没有速度对pwm的映射，怎么办呢，直接乱设置一个速度好了
     Motor_SetDuty(HOMING_LOW_PWM_DUTY); // 使用固定的低速 PWM
 
@@ -130,7 +130,7 @@ HomingState_t MotorEncoder_CheckHomingState(uint32_t timeout_ms)
     return homing_state;
 }
 
-void MotorEncoder_HOMING_EXTI_Callback(void)
+void MotorEncoder_HOMED_EXTI_Callback(void)
 {
     // 只有在 HOMING_RUNNING 状态下触发才有效
     if (homing_state != HOMING_RUNNING) {
@@ -151,5 +151,9 @@ void MotorEncoder_HOMING_EXTI_Callback(void)
     enc.speed_rpm = 0.0f;
 
     /* 4. 更新状态 */
+    printf("调零结束\r\n");
     homing_state = HOMING_SUCCESS;
+
+    /* 外部中断停用 */
+    HAL_NVIC_DisableIRQ(EXTI9_5_IRQn);
 }

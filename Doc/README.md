@@ -50,3 +50,20 @@ MotorEncoder的调零函数还没写完，GROK的方案给了一个状态机调�
 **UNDONE**
 
 EXTI回调函数还没写完
+
+## 11/5 evening
+
+测试:
+
+**DONE**
+
+1. 电机能动 OK
+2. 霍尔编码器 OK
+3. 调零 OK
+4. 电机编码器能正常运行 OK
+5. 调零 + PID OK
+
+**UNDONE**
+
+PID 调参, 挂个像样的负载做个场景测试.
+电机控制demo储不测试完毕, 后续工作主要关注电控板和FOC BLDC电机
