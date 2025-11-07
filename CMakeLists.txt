@@ -49,14 +49,53 @@ else ()
     add_compile_options(-Og -g)
 endif ()
 
+#
+# 包含项目内部的相对路径
+#
 include_directories(Core/Inc
         UserApp/app/Inc
         UserApp/bsp/Inc
-        C:/Users/tanga/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/STM32F1xx_HAL_Driver/Inc C:/Users/tanga/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy C:/Users/tanga/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/CMSIS/Device/ST/STM32F1xx/Include C:/Users/tanga/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/CMSIS/Include C:/Users/唐崃恩/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/STM32F1xx_HAL_Driver/Inc C:/Users/唐崃恩/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy C:/Users/唐崃恩/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/CMSIS/Device/ST/STM32F1xx/Include C:/Users/唐崃恩/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/CMSIS/Include)
+        Drivers/STM32F1xx_HAL_Driver/Inc
+        Drivers/STM32F1xx_HAL_Driver/Inc/Legacy
+        Drivers/CMSIS/Device/ST/STM32F1xx/Include
+        Drivers/CMSIS/Include
+
+        # --- 以下是为你电脑配置的绝对路径 (因为路径含空格，必须加引号) ---
+        "C:/Users/Vincent Lu/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/STM32F1xx_HAL_Driver/Inc"
+        "C:/Users/Vincent Lu/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy"
+        "C:/Users/Vincent Lu/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/CMSIS/Device/ST/STM32F1xx/Include"
+        "C:/Users/Vincent Lu/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/CMSIS/Include"
+
+        "C:/Users/tanga/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/STM32F1xx_HAL_Driver/Inc"
+        "C:/Users/tanga/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy"
+        "C:/Users/tanga/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/CMSIS/Device/ST/STM32F1xx/Include"
+        "C:/Users/tanga/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/CMSIS/Include"
+        "C:/Users/唐崃恩/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/STM32F1xx_HAL_Driver/Inc"
+        "C:/Users/唐崃恩/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy"
+        "C:/Users/唐崃恩/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/CMSIS/Device/ST/STM32F1xx/Include"
+        "C:/Users/唐崃恩/STM32Cube/Repository/STM32Cube_FW_F1_V1.8.6/Drivers/CMSIS/Include"
+)
 
 add_definitions(-DDEBUG -DUSE_HAL_DRIVER -DSTM32F103xB)
 
-file(GLOB_RECURSE SOURCES "Core/*.*" "Drivers/*.*" "UserApp/*.*")
+#
+# 修复了这里的 GLOB：只查找 .c 源文件
+#
+file(GLOB_RECURSE C_SOURCES
+        "Core/Src/*.c"
+        "Drivers/STM32F1xx_HAL_Driver/Src/*.c"
+        "UserApp/app/Src/*.c"
+        "UserApp/bsp/Src/*.c"
+)
+
+#
+# 修复了汇编文件的路径：直接指定根目录下的启动文件
+#
+set(ASM_SOURCES ${CMAKE_SOURCE_DIR}/startup_stm32f103xb.s)
+
+# 将 C 源文件和汇编源文件合并
+set(SOURCES ${C_SOURCES} ${ASM_SOURCES})
+
 
 set(LINKER_SCRIPT ${CMAKE_SOURCE_DIR}/STM32F103C8TX_FLASH.ld)
 
@@ -64,7 +103,7 @@ add_link_options(-Wl,-gc-sections,--print-memory-usage,-Map=${PROJECT_BINARY_DIR
 add_link_options(-mcpu=cortex-m3 -mthumb -mthumb-interwork)
 add_link_options(-T ${LINKER_SCRIPT})
 
-add_executable(${PROJECT_NAME}.elf ${SOURCES} ${LINKER_SCRIPT})
+add_executable(${PROJECT_NAME}.elf ${SOURCES} ${LINK_SCRIPT_PROPERTY_KEYWORDS} ${LINKER_SCRIPT})
 
 set(HEX_FILE ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.hex)
 set(BIN_FILE ${PROJECT_BINARY_DIR}/${PROJECT_NAME}.bin)
