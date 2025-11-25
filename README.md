@@ -47,6 +47,47 @@ ED --> BSP_GPIO
 
 ---
 
+## ?? 机械与电子设计 (Mechanical & Electronics)
+
+为了实现“机载轻量化”与“系统高集成度”的目标，本项目并未止步于现成的模块拼接，而是同步进行了定制化的机械结构建模与 PCB 电路设计。
+
+### ?? 机械结构优化 (Mechanical Optimization)
+
+机械臂本体采用**连杆折叠机构**设计，旨在解决无人机挂载时的空间收纳痛点。
+
+![Mechanical Design](Figures/README/mech_design.png)
+*(注：上图展示了当前的连杆传动与齿轮减速方案)*
+
+* **折叠收纳**：通过多连杆机构实现大范围的折叠与展开，收纳状态下重心贴近机身，减少对飞行姿态的影响。
+* **齿轮传动**：自定义齿轮组设计，在保证 BLDC 电机高速响应的同时，提供足够的末端抓取力矩。
+* **迭代开发**：目前结构处于持续迭代中，重点优化连杆的拓扑结构以减轻重量，并增加关键部位的机械强度。
+
+### ? 定制化电路设计 (Custom PCB Design)
+
+为了摆脱杜邦线连接带来的不稳定性并减小电控体积，项目自主设计了 **ARA电控调试板 (ARA Control Board V0.21)**。
+
+![PCB Design](Figures/README/pcb_design.png)
+
+* **高集成度**：板载集成了 TB6612 驱动芯片（用于夹爪直流电机控制）、AMS1117 电源管理及 IMU 惯导接口。
+* **接口标准化**：引出了符合 SimpleFOCMini 接口定义的 PWM/Enable 排针，以及用于 Laser/Ultrasonic 传感器的专用接口。
+* **抗干扰设计**：针对机载高频振动与电磁环境，优化了 PCB 走线布局，增强了信号完整性。
+
+---
+
+## ? 贡献与致谢 (Credits)
+
+本项目核心控制算法基于优秀的开源项目 [SimpleFOC](https://github.com/simplefoc/Arduino-FOC)。
+
+**致谢名单：**
+* **SimpleFOC Community**: 提供了强大的 FOC 算法库与活跃的社区支持。
+* **FreeRTOS**: 提供了稳定高效的实时操作系统，保证了多任务调度的实时性。
+
+**特别鸣谢：**
+* **灯哥开源 (DengFOC)**: 感谢灯哥在 Bilibili 制作的 [FOC 系列教程](https://space.bilibili.com/493192058) 为本项目提供了宝贵的入门指引。
+* **DengFOC_Lib**: 参考了 [DengFOC](https://github.com/ToanTech/DengFOC_Lib) 的部分实现逻辑，对理解 FOC 底层原理帮助巨大。
+
+---
+
 ## 硬件环境 (Hardware Setup)
 
 ### 核心组件
@@ -108,13 +149,17 @@ ED --> BSP_GPIO
 
 ---
 
-## 贡献与致谢 (Credits)
+## ? 贡献与致谢 (Credits)
 
 本项目核心控制算法基于优秀的开源项目 [SimpleFOC](https://github.com/simplefoc/Arduino-FOC)。
 
-特别感谢：
-* **SimpleFOC Community**: 提供了强大的 FOC 算法库。
-* **FreeRTOS**: 提供了稳定高效的实时操作系统。
+**致谢名单：**
+* **SimpleFOC Community**: 提供了强大的 FOC 算法库与活跃的社区支持。
+* **FreeRTOS**: 提供了稳定高效的实时操作系统，保证了多任务调度的实时性。
+
+**特别鸣谢：**
+* **灯哥开源 (DengFOC)**: 感谢灯哥在 Bilibili 制作的 [FOC 系列教程](https://space.bilibili.com/493192058) 为本项目提供了宝贵的入门指引。
+* **DengFOC_Lib**: 参考了 [DengFOC](https://github.com/ToanTech/DengFOC_Lib) 的部分实现逻辑，对理解 FOC 底层原理帮助巨大。
 
 ---
 
