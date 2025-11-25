@@ -1,0 +1,36 @@
+感谢您下载本资料包。
+
+与其说是完整的教程合集，这里更像是一系列代码片段与实用工具的集合。内容难免有疏漏与不成熟之处，还望各位前辈与同好不吝指教。
+
+资料中涉及的硬件，例如直流无刷电机、磁编码器、FOC驱动板、ESP32开发板及专用电源等，均由「M创动工坊」提供。欢迎通过我们的官方淘宝店了解和选购。
+
+淘宝店铺：M创动工坊
+店铺地址： mcdgf.taobao.com
+
+【特别提醒】
+近期我们发现在拼多多、京东、速卖通等多个平台均有商家盗用本店的产品图片与技术信息。在此郑重声明，除上述淘宝店铺外，我们未在其他任何平台开设店铺。请务必认准“M创动工坊”淘宝店。
+
+本店长期稳定供应多款直流无刷电机、磁编码器、驱动板等核心部件。产品线与本资料一样，也在持续更新与丰富中，敬请关注。
+
+【附：学习资料分享】
+此外，我们也从网络搜集并整理了的FOC与STM32学习资料包，内容涵盖直流无刷电机控制等，供您参考学习：
+1、文件名称： FOC资料分享筛选.rar，约1.9G。
+网盘链接： https://pan.baidu.com/s/1rFtPv_vNR70A95P7tTn4ZA?pwd=CDGF
+提取码： CDGF
+解压密码： mcdgf
+
+2、STM32与FOC控制，搜集源码，1.45G，可以了解一下链接: https://pan.baidu.com/s/1VGLUxWcd-B59Hom9jlIyQQ?pwd=CDGF 提取码: CDGF
+
+3、Keil代码STM32移植simplefoc链接: https://pan.baidu.com/s/11Tm7PJlpVR5GxrdZMwiSiQ?pwd=CDGF 提取码: CDGF 
+板子STM32F103C8T6可以直接用。
+原理说明参考：https://blog.csdn.net/qq_42681425/article/details/134489405
+
+板子STM32F405RGT可用，FOC控制和编码器读取代码分享.rar
+链接: https://pan.baidu.com/s/19Mtq9yRM0HshsjEJSO-naw?pwd=CDGF 提取码: CDGF
+
+STM32HALFOCdouble双电机驱动HAL库.zip
+链接: https://pan.baidu.com/s/1C45DGU6xCczLXwG38odeIw?pwd=CDGF 提取码: CDGF
+
+这三个链接的资料来源网络，这里免费分享大家一起学习，不做商业用途！
+
+希望这些资料能对您的项目与学习有所帮助。

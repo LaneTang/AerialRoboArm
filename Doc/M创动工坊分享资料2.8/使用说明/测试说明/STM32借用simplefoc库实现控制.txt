@@ -1,0 +1,67 @@
+#include <Arduino.h>
+#include <SimpleFOC.h>
+
+// AS5600磁编码器配置（I2C通信）
+MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C, 0x36); // AS5600地址0x36，12位分辨率
+
+// DRV8313驱动器配置（3PWM模式）
+BLDCDriver3PWM driver(PA8, PA9, PA10, PA11); // PWM引脚U, V, W和使能引脚
+
+// 电机实例
+BLDCMotor motor = BLDCMotor(7); // 7极对数
+
+float target_angle = 10; // 目标角度（弧度）
+
+void setup()
+{
+    // 初始化I2C通信（根据硬件连接选择引脚）
+    Wire.setSDA(PB7);  // 根据实际接线修改
+    Wire.setSCL(PB6);  // 根据实际接线修改
+    Wire.begin();
+    
+    // 初始化磁编码器
+    sensor.init();
+    sensor.direction = CW; // 根据磁铁安装方向调整（CW顺时针，CCW逆时针）
+    motor.linkSensor(&sensor);
+
+    // 配置驱动器参数
+    driver.voltage_power_supply = 12; // 电机供电电压
+    driver.pwm_frequency = 20000;     // PWM频率
+    driver.init();
+    motor.linkDriver(&driver);
+
+    // FOC调制方式
+    motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
+
+    // 设置电机控制参数
+    motor.voltage_limit = 6;    // 电压限制（安全启动值）
+    motor.velocity_limit = 50;  // 转速限制（rad/s）
+    
+    // 配置位置控制模式（根据需求选择模式）
+    motor.controller = MotionControlType::angle;
+    // PID参数需要根据实际调试
+    motor.P_angle.P = 0.5f;     // 位置环P增益
+    motor.PID_velocity.P = 0.05; // 速度环P增益
+    motor.PID_velocity.I = 0.1;
+    motor.LPF_velocity.Tf = 0.01;
+
+    // 初始化串口监控
+    Serial2.begin(115200);
+    motor.useMonitoring(Serial2);
+
+    // 初始化FOC
+    motor.init();
+    motor.initFOC();
+    Serial2.println("Motor ready.");
+}
+
+void loop()
+{
+    motor.loopFOC();       // 实时磁场定向控制
+    motor.move(target_angle); // 控制电机转到目标角度
+
+    // 监控输出（可选）
+    Serial2.print("Angle: ");
+    Serial2.println(motor.shaft_angle);
+    _delay(10);
+}
