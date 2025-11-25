@@ -7,7 +7,7 @@
 
 ## 项目简介 (Introduction)
 
-**AerialRoboArm (ARA)** 是一个专为机载环境（如无人机挂载）设计的轻量化、可折叠机械臂实验平台。
+**AerialRoboArm (ARA)** 是一个专为机载环境（如无人机挂载）设计的轻量化、可折叠机械臂实验平台。目前项目还在原型验证开发中，下文提到的各项设计与实现均为初版，未来将持续迭代优化。
 
 本项目旨在解决空中抓取任务中对**载荷重量敏感**与**控制精度要求高**之间的矛盾。通过采用 **STM32** 作为主控核心，结合 **SimpleFOC** 矢量控制算法驱动无刷电机（BLDC），实现了机械臂在平面内的稳定位置闭环与快速响应。软件架构基于 **FreeRTOS** 实时操作系统，采用分层模块化设计，具备良好的扩展性与移植性。
 
@@ -47,11 +47,11 @@ ED --> BSP_GPIO
 
 ---
 
-## ?? 机械与电子设计 (Mechanical & Electronics)
+## 机械与电子设计 (Mechanical & Electronics)
 
 为了实现“机载轻量化”与“系统高集成度”的目标，本项目并未止步于现成的模块拼接，而是同步进行了定制化的机械结构建模与 PCB 电路设计。
 
-### ?? 机械结构优化 (Mechanical Optimization)
+### 机械结构优化 (Mechanical Optimization)
 
 机械臂本体采用**连杆折叠机构**设计，旨在解决无人机挂载时的空间收纳痛点。
 
@@ -62,7 +62,7 @@ ED --> BSP_GPIO
 * **齿轮传动**：自定义齿轮组设计，在保证 BLDC 电机高速响应的同时，提供足够的末端抓取力矩。
 * **迭代开发**：目前结构处于持续迭代中，重点优化连杆的拓扑结构以减轻重量，并增加关键部位的机械强度。
 
-### ? 定制化电路设计 (Custom PCB Design)
+### 定制化电路设计 (Custom PCB Design)
 
 为了摆脱杜邦线连接带来的不稳定性并减小电控体积，项目自主设计了 **ARA电控调试板 (ARA Control Board V0.21)**。
 
@@ -71,20 +71,6 @@ ED --> BSP_GPIO
 * **高集成度**：板载集成了 TB6612 驱动芯片（用于夹爪直流电机控制）、AMS1117 电源管理及 IMU 惯导接口。
 * **接口标准化**：引出了符合 SimpleFOCMini 接口定义的 PWM/Enable 排针，以及用于 Laser/Ultrasonic 传感器的专用接口。
 * **抗干扰设计**：针对机载高频振动与电磁环境，优化了 PCB 走线布局，增强了信号完整性。
-
----
-
-## ? 贡献与致谢 (Credits)
-
-本项目核心控制算法基于优秀的开源项目 [SimpleFOC](https://github.com/simplefoc/Arduino-FOC)。
-
-**致谢名单：**
-* **SimpleFOC Community**: 提供了强大的 FOC 算法库与活跃的社区支持。
-* **FreeRTOS**: 提供了稳定高效的实时操作系统，保证了多任务调度的实时性。
-
-**特别鸣谢：**
-* **灯哥开源 (DengFOC)**: 感谢灯哥在 Bilibili 制作的 [FOC 系列教程](https://space.bilibili.com/493192058) 为本项目提供了宝贵的入门指引。
-* **DengFOC_Lib**: 参考了 [DengFOC](https://github.com/ToanTech/DengFOC_Lib) 的部分实现逻辑，对理解 FOC 底层原理帮助巨大。
 
 ---
 
@@ -149,7 +135,24 @@ ED --> BSP_GPIO
 
 ---
 
-## ? 贡献与致谢 (Credits)
+## 特别声明：现代化的开发体验 (Powered by Modern Toolchain)
+
+本项目代码 **100% 在 CLion + STM32CubeMX 环境下开发完成**。
+
+我们在开发过程中深刻体会到了现代化工具链带来的效率飞跃，在此特别推荐这套“黄金组合”：
+
+* **优雅的现代化 UI**: 告别上个世纪的界面风格，CLion 提供了赏心悦目的 Dark Mode 与极简视觉设计，让嵌入式开发也能成为一种视觉享受。
+* **极致的代码智能**: 得益于 JetBrains 强大的 IntelliSense 引擎，无论是代码补全、智能导航还是即时重构（Refactoring），都能让编码如丝般顺滑，大幅降低心智负担。
+* **强大的调试能力**: 内置的 OpenOCD/GDB 调试界面直观清晰，支持变量实时监控、内存视图以及 RTOS 任务状态查看，让 Bug 无处遁形。
+* **CMake 构建系统**: 拥抱通用的 CMake 构建方式，配合 STM32CubeMX 的代码生成，真正实现了从底层配置到上层逻辑开发的无缝衔接。
+
+如果你还在忍受传统 IDE 匮乏的代码编辑体验（比如说uvision5），臃肿的软件架构带来的低性能与响应速度（比如说Stm32CubeIDE），低项目兼容性（比如说uvision5）和辣眼睛的UI（比如说uvision5），不妨尝试迁移到 CLion，开启全新的嵌入式开发体验！
+
+[Clion开发stm32指路](https://zhuanlan.zhihu.com/p/145801160)
+
+---
+
+## 贡献与致谢 (Credits)
 
 本项目核心控制算法基于优秀的开源项目 [SimpleFOC](https://github.com/simplefoc/Arduino-FOC)。
 
