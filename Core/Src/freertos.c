@@ -25,13 +25,14 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "oled.h"
 #include "stdio.h"
-#include "Log.h"
+#include "bsp_uart.h"
+#include "app_scheduler.h" // [添加]
+#include "task_motion.h"   // [添加]
+#include <math.h> // 用于测试浮点打印
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
-typedef StaticTask_t osStaticThreadDef_t;
 /* USER CODE BEGIN PTD */
 
 /* USER CODE END PTD */
@@ -59,15 +60,17 @@ const osThreadAttr_t defaultTask_attributes = {
 };
 /* Definitions for vLogTask */
 osThreadId_t vLogTaskHandle;
-uint32_t vLogTaskBuffer[ 128 ];
-osStaticThreadDef_t vLogTaskControlBlock;
 const osThreadAttr_t vLogTask_attributes = {
   .name = "vLogTask",
-  .cb_mem = &vLogTaskControlBlock,
-  .cb_size = sizeof(vLogTaskControlBlock),
-  .stack_mem = &vLogTaskBuffer[0],
-  .stack_size = sizeof(vLogTaskBuffer),
-  .priority = (osPriority_t) osPriorityLow,
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for vMotorTask */
+osThreadId_t vMotorTaskHandle;
+const osThreadAttr_t vMotorTask_attributes = {
+  .name = "vMotorTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -77,6 +80,7 @@ const osThreadAttr_t vLogTask_attributes = {
 
 void StartDefaultTask(void *argument);
 void LogTask(void *argument);
+void MotorTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -113,6 +117,9 @@ void MX_FREERTOS_Init(void) {
   /* creation of vLogTask */
   vLogTaskHandle = osThreadNew(LogTask, NULL, &vLogTask_attributes);
 
+  /* creation of vMotorTask */
+  vMotorTaskHandle = osThreadNew(MotorTask, NULL, &vMotorTask_attributes);
+
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -133,7 +140,11 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+    // [添加] 直接调用 ARA 的调度器入口
+    // App_Scheduler_Entry 内部有 for(;;) 循环，所以不会返回
+    App_Scheduler_Entry(argument);
 
+    // 防御性代码，理论上永远不会运行到这里
   /* Infinite loop */
   for(;;)
   {
@@ -152,31 +163,41 @@ void StartDefaultTask(void *argument)
 void LogTask(void *argument)
 {
   /* USER CODE BEGIN LogTask */
-    uint32_t counter = 0;
-    char text_buffer[20];
-
-    // Initialization
-    OLED_Init();
-    Log_Init();
-
-
-    // 静态文本初始化
-    OLED_Clear();
-    OLED_ShowString(0, 0, (uint8_t *)"HAL I2C DMA BSP", 16, 1);
-    OLED_ShowString(0, 16, (uint8_t *)"Counter:", 16, 1);
 
     /* Infinite loop */
     for(;;)
     {
-        counter++;
+        // 示例：打印当前系统状态
+        // BSP_UART_Printf("SysSt: %d\r\n", App_Scheduler_GetState());
+        // BSP_UART_Printf("RunT: %s %s\r\n", __DATE__, __TIME__);
 
-//        App_Printf("Task1 Running: %d ms\n", HAL_GetTick());
-
-        // 2.2 绘制计数器 (x, y, num, len, size1, mode)
-        OLED_ShowNum(60, 16, counter, 8, 16, 1);
-        osDelay(1000);
+        osDelay(500);
     }
   /* USER CODE END LogTask */
+}
+
+/* USER CODE BEGIN Header_MotorTask */
+/**
+* @brief Function implementing the vMotorTask thread.
+* @param argument: Not used
+* @retval None
+*/
+
+
+/* USER CODE END Header_MotorTask */
+void MotorTask(void *argument)
+{
+    // [添加] 直接调用 ARA 的运动控制入口
+    // TaskMotion_Entry 内部实现了 1kHz 的控制回路
+    TaskMotion_Entry(argument);
+
+
+    /* Infinite loop */
+  for(;;)
+  {
+
+  }
+  /* USER CODE END MotorTask */
 }
 
 /* Private application code --------------------------------------------------*/

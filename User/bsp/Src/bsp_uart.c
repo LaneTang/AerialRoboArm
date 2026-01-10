@@ -1,159 +1,149 @@
 /**
-  ******************************************************************************
-  * @file    bsp_uart.c
-  * @brief   BSP UART 实现 (带回调机制)
-  ******************************************************************************
-  */
+ * @file bsp_uart.c
+ * @brief UART Driver Implementation (DMA RingBuffer + Blocking Printf)
+ * @author ARA Project Coder
+ */
 
 #include "bsp_uart.h"
-#include "usart.h" // 包含 huart1, huart2
+#include "stm32f1xx_hal.h"
+#include <stdio.h>
 #include <string.h>
 
-/* --- 内部管理结构体 --- */
+/* --- Configuration --- */
+#define UART_RX_BUF_SIZE    (256)   // Must be power of 2 for efficiency if optimizing
+#define UART_TX_TIMEOUT     (100)   // ms for blocking printf
+
+/* --- Hardware Resources --- */
+// External handles defined in main.c
+extern UART_HandleTypeDef huart3;
+extern DMA_HandleTypeDef hdma_usart3_rx;
+// Note: hdma_usart1_rx is needed to read CNDTR (Counter)
+
+/* --- Internal Context --- */
 typedef struct {
     UART_HandleTypeDef *huart;
-    DMA_HandleTypeDef  *hdma_rx;
-
-    // RX RingBuffer
     uint8_t  rx_buffer[UART_RX_BUF_SIZE];
-    uint16_t rx_write_index;
-    uint16_t rx_read_index;
+    uint16_t rx_tail_pos;  // Software Read Index
+    AraCallback_t rx_cplt_cb;
+} UartContext_t;
 
-    // TX Mutex
-    osMutexId_t tx_mutex;
-
-    // 接收完成回调 (Hook)
-    BspUart_Callback_t rx_cplt_cb;
-} BspUart_Handle_t;
-
-extern DMA_HandleTypeDef hdma_usart1_rx;
-extern DMA_HandleTypeDef hdma_usart2_rx;
-
-/* --- 静态实例 --- */
-static BspUart_Handle_t uart_devs[BSP_UART_NUM] = {
-        // [0] ELRS (USART1)
-        {
-                .huart = &huart1,
-                .hdma_rx = &hdma_usart1_rx,
-                .rx_read_index = 0,
-                .tx_mutex = NULL,
-                .rx_cplt_cb = NULL // 初始为空
-        },
-        // [1] DEBUG (USART2)
-        {
-                .huart = &huart2,
-                .hdma_rx = &hdma_usart2_rx,
-                .rx_read_index = 0,
-                .tx_mutex = NULL,
-                .rx_cplt_cb = NULL
-        }
+static UartContext_t ctx_debug = {
+        .huart = &huart3,
+        .rx_tail_pos = 0,
+        .rx_cplt_cb = NULL
 };
 
-static const osMutexAttr_t uart_tx_mutex_attr = {
-        .name = "UART_TX_Mutex",
-        .attr_bits = osMutexPrioInherit,
-};
+/* --- Helper: Get DMA Head Position --- */
+static uint16_t GetDmaHead(void)
+{
+    /* * CNDTR counts DOWN from Size to 0.
+     * Head Index = Size - CNDTR
+     */
+    return UART_RX_BUF_SIZE - __HAL_DMA_GET_COUNTER(ctx_debug.huart->hdmarx);
+}
 
-/* --- 初始化 --- */
-void BSP_UART_Init(void) {
-    for (int i = 0; i < BSP_UART_NUM; i++) {
-        uart_devs[i].tx_mutex = osMutexNew(&uart_tx_mutex_attr);
+/* --- API Implementation --- */
 
-        // 开启 IDLE 中断
-        __HAL_UART_ENABLE_IT(uart_devs[i].huart, UART_IT_IDLE);
+void BSP_UART_Init(void)
+{
+    // Start DMA Reception in Circular Mode
+    // Data keeps overwriting old data if not read fast enough (Ring Buffer)
+    HAL_UART_Receive_DMA(ctx_debug.huart, ctx_debug.rx_buffer, UART_RX_BUF_SIZE);
+}
 
-        // 启动 DMA Circular 接收
-        HAL_UART_Receive_DMA(uart_devs[i].huart, uart_devs[i].rx_buffer, UART_RX_BUF_SIZE);
+void BSP_UART_Printf(const char *format, ...)
+{
+    static char tx_buf[128]; // Local static buffer (Non-reentrant without lock)
+
+    /* * CRITICAL SECTION START
+     * In a strict OS environment, use a Mutex here.
+     * For L1/BSP, we assume single-threaded debugging or accept minor collisions.
+     */
+
+    va_list args;
+    va_start(args, format);
+
+    // Format string
+    int len = vsnprintf(tx_buf, sizeof(tx_buf), format, args);
+
+    va_end(args);
+
+    if (len > 0) {
+        // Blocking Transmit to ensure full message goes out
+        HAL_UART_Transmit(ctx_debug.huart, (uint8_t*)tx_buf, (uint16_t)len, UART_TX_TIMEOUT);
     }
 }
 
-/* --- 注册回调函数 --- */
-void BSP_UART_SetRxCpltCallback(BspUart_Dev_t dev, BspUart_Callback_t cb) {
-    if (dev < BSP_UART_NUM) {
-        uart_devs[dev].rx_cplt_cb = cb;
-    }
+AraStatus_t BSP_UART_Send_DMA(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len)
+{
+    if (dev >= BSP_UART_NUM) return ARA_ERR_PARAM;
+    // Currently only supporting Debug Port (USART1)
+    if (dev != BSP_UART_DEBUG) return ARA_ERR_PARAM;
+
+    HAL_StatusTypeDef status = HAL_UART_Transmit_DMA(ctx_debug.huart, p_data, len);
+
+    if (status == HAL_BUSY) return ARA_BUSY;
+    if (status != HAL_OK)   return ARA_ERR_IO;
+
+    return ARA_OK;
 }
 
-/* --- 核心：中断处理分发器 --- */
-// 请在 stm32f1xx_it.c 的 USARTx_IRQHandler 中调用此函数
-void BSP_UART_IRQHandler(UART_HandleTypeDef *huart) {
-    BspUart_Handle_t *dev = NULL;
+uint16_t BSP_UART_Read(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len)
+{
+    if (dev != BSP_UART_DEBUG) return 0;
 
-    // 1. 匹配设备
-    if (huart->Instance == USART1) {
-        dev = &uart_devs[BSP_UART_ELRS];
-    } else if (huart->Instance == USART2) {
-        dev = &uart_devs[BSP_UART_DEBUG];
+    uint16_t head = GetDmaHead();
+    uint16_t tail = ctx_debug.rx_tail_pos;
+    uint16_t bytes_available = 0;
+
+    // Calculate available bytes
+    if (head >= tail) {
+        bytes_available = head - tail;
+    } else {
+        bytes_available = (UART_RX_BUF_SIZE - tail) + head;
     }
 
-    if (dev == NULL) return;
+    if (bytes_available == 0) {
+        return 0;
+    }
 
-    // 2. 检查 IDLE 中断
-    if (__HAL_UART_GET_FLAG(huart, UART_FLAG_IDLE)) {
-        __HAL_UART_CLEAR_IDLEFLAG(huart);
+    // Cap read length to available data
+    uint16_t read_len = (len < bytes_available) ? len : bytes_available;
+    uint16_t cnt = 0;
 
-        // 3. 执行上层注册的回调 (如果存在)
-        if (dev->rx_cplt_cb != NULL) {
-            dev->rx_cplt_cb();
+    // Copy data (handling wrap-around)
+    while (cnt < read_len) {
+        p_data[cnt++] = ctx_debug.rx_buffer[tail++];
+
+        if (tail >= UART_RX_BUF_SIZE) {
+            tail = 0;
         }
     }
+
+    // Update global tail
+    ctx_debug.rx_tail_pos = tail;
+
+    return read_len;
 }
 
-/* --- 发送逻辑 (保持不变) --- */
-HAL_StatusTypeDef BSP_UART_Send_DMA(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len) {
-    BspUart_Handle_t *h = &uart_devs[dev];
-    if (osMutexAcquire(h->tx_mutex, 10) != osOK) return HAL_BUSY;
-    HAL_StatusTypeDef status = HAL_UART_Transmit_DMA(h->huart, p_data, len);
-    osMutexRelease(h->tx_mutex);
-    return status;
-}
-
-HAL_StatusTypeDef BSP_UART_Send_Poll(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len) {
-    return HAL_UART_Transmit(uart_devs[dev].huart, p_data, len, 100);
-}
-
-/* --- 接收逻辑 (保持不变) --- */
-static uint16_t Get_DMA_Write_Index(BspUart_Handle_t *h) {
-    return (UART_RX_BUF_SIZE - __HAL_DMA_GET_COUNTER(h->hdma_rx));
-}
-
-uint16_t BSP_UART_Available(BspUart_Dev_t dev) {
-    BspUart_Handle_t *h = &uart_devs[dev];
-    uint16_t write_idx = Get_DMA_Write_Index(h);
-
-    if (write_idx >= h->rx_read_index) {
-        return write_idx - h->rx_read_index;
-    } else {
-        return (UART_RX_BUF_SIZE - h->rx_read_index) + write_idx;
+void BSP_UART_SetRxCpltCallback(BspUart_Dev_t dev, AraCallback_t cb)
+{
+    if (dev == BSP_UART_DEBUG) {
+        ctx_debug.rx_cplt_cb = cb;
     }
 }
 
-uint16_t BSP_UART_Read(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len) {
-    BspUart_Handle_t *h = &uart_devs[dev];
-    uint16_t available = BSP_UART_Available(dev);
-    uint16_t write_idx = Get_DMA_Write_Index(h);
-
-    if (len > available) len = available;
-    if (len == 0) return 0;
-
-    if (write_idx >= h->rx_read_index) {
-        memcpy(p_data, &h->rx_buffer[h->rx_read_index], len);
-        h->rx_read_index += len;
-    } else {
-        uint16_t tail_len = UART_RX_BUF_SIZE - h->rx_read_index;
-        if (len <= tail_len) {
-            memcpy(p_data, &h->rx_buffer[h->rx_read_index], len);
-            h->rx_read_index += len;
-        } else {
-            memcpy(p_data, &h->rx_buffer[h->rx_read_index], tail_len);
-            memcpy(p_data + tail_len, &h->rx_buffer[0], len - tail_len);
-            h->rx_read_index = len - tail_len;
+/* --- ISR Hooks --- */
+/**
+ * @brief Rx Transfer Completed Callback
+ * @note  In Circular Mode, this is called when buffer is half-full (HT) or full (TC).
+ * Usually used to wake up the processing task.
+ */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart == ctx_debug.huart) {
+        if (ctx_debug.rx_cplt_cb) {
+            ctx_debug.rx_cplt_cb();
         }
     }
-    return len;
-}
-
-void BSP_UART_FlushRx(BspUart_Dev_t dev) {
-    BspUart_Handle_t *h = &uart_devs[dev];
-    h->rx_read_index = Get_DMA_Write_Index(h);
 }

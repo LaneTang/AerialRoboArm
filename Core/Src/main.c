@@ -27,7 +27,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "bsp_uart.h"
+#include "app_scheduler.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -94,13 +95,13 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_I2C1_Init();
-  MX_USART2_UART_Init();
-  MX_I2C2_Init();
-  MX_USART1_UART_Init();
   MX_TIM1_Init();
-  MX_TIM2_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
+    BSP_UART_Init(); // 确保串口先初始化，方便打印 Log
+    App_Scheduler_Init();
 
+    BSP_UART_Printf("ARA System Initialized. Starting Kernel...\r\n");
   /* USER CODE END 2 */
 
   /* Init scheduler */

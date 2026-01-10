@@ -1,52 +1,48 @@
 /**
-  ******************************************************************************
-  * @file    bsp_pwm.h
-  * @brief   BSP PWM 驱动 (FOC 3路PWM + 2路舵机PWM)
-  * @author  ARA Project Team
-  ******************************************************************************
-  */
-
-#ifndef __BSP_PWM_H
-#define __BSP_PWM_H
-
-#include "stm32f1xx_hal.h" // 根据实际芯片型号调整
-
-/* --- 设备定义 --- */
-
-/** * @brief 舵机通道枚举
- * 对应 TIM2 的不同 Channel
+ * @file bsp_pwm.h
+ * @brief PWM Driver for FOC (3-Phase) and Servos
+ * @note  OPTIMIZED: Uses uint16_t instead of float for F103 performance.
  */
+
+#ifndef BSP_PWM_H
+#define BSP_PWM_H
+
+#include "ara_def.h"
+
+/* --- Configuration Constants --- */
+/* FOC PWM Period (ARR). Example: 72MHz / 3600 = 20kHz */
+#define BSP_PWM_MAX_DUTY    (3600)
+
+/* --- Device Definition --- */
 typedef enum {
-    BSP_SERVO_1 = 0,    // 舵机1 (例如: 夹爪) - TIM2 CH1
-    BSP_SERVO_2,        // 舵机2 (例如: 辅助关节) - TIM2 CH2
+    BSP_SERVO_1 = 0,    // Gripper / Aux Axis
+    BSP_SERVO_2,
     BSP_SERVO_NUM
 } BspServo_Dev_t;
 
-/* --- 初始化 --- */
+/* --- API --- */
+
 void BSP_PWM_Init(void);
 
-/* --- BLDC FOC 控制接口 --- */
 /**
- * @brief  设置 BLDC 3相占空比 (FOC 专用)
- * @param  dc_a: A相占空比 (0.0f ~ 1.0f)
- * @param  dc_b: B相占空比 (0.0f ~ 1.0f)
- * @param  dc_c: C相占空比 (0.0f ~ 1.0f)
- * @note   对应 TIM1 CH1/CH2/CH3
+ * @brief  Set 3-Phase Duty Cycle for FOC (Integer Optimized)
+ * @param  u  Duty for Phase A (0 to BSP_PWM_MAX_DUTY)
+ * @param  v  Duty for Phase B (0 to BSP_PWM_MAX_DUTY)
+ * @param  w  Duty for Phase C (0 to BSP_PWM_MAX_DUTY)
+ * @note   Directly updates CCR registers. Very fast.
  */
-void BSP_PWM_Set3PhaseDuty(float dc_a, float dc_b, float dc_c);
+void BSP_PWM_Set3PhaseDuty_U16(uint16_t u, uint16_t v, uint16_t w);
 
-/* --- 舵机控制接口 --- */
 /**
- * @brief  设置舵机脉宽
- * @param  servo: 舵机编号 (BSP_SERVO_1 / BSP_SERVO_2)
- * @param  us:    脉宽值，单位微秒 (通常范围 500 - 2500)
+ * @brief  Set Servo Pulse Width
+ * @param  servo  Target Servo
+ * @param  us     Pulse width in microseconds (500-2500)
  */
 void BSP_PWM_SetServoPulse(BspServo_Dev_t servo, uint16_t us);
 
-/* --- 安全停机 --- */
 /**
- * @brief  停止所有 PWM 输出 (紧急停机用)
+ * @brief  Emergency Stop - Forces all PWM outputs to safe state (Low/Hi-Z)
  */
 void BSP_PWM_StopAll(void);
 
-#endif // __BSP_PWM_H
+#endif // BSP_PWM_H

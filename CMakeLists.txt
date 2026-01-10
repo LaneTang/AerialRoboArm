@@ -50,8 +50,12 @@ else ()
 endif ()
 
 include_directories(Core/Inc
-        User/bsp/Inc
+        User/app/Inc
+        User/task/Inc
+        User/mod/Inc
         User/drv/Inc
+        User/bsp/Inc
+        User/global
         Drivers/STM32F1xx_HAL_Driver/Inc/Legacy Drivers/STM32F1xx_HAL_Driver/Inc Middlewares/Third_Party/FreeRTOS/Source/include Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM3 Drivers/CMSIS/Device/ST/STM32F1xx/Include Drivers/CMSIS/Include)
 
 add_definitions(-DDEBUG -DUSE_HAL_DRIVER -DSTM32F103xB)

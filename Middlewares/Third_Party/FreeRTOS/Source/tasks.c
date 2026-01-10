@@ -360,7 +360,7 @@ PRIVILEGED_DATA static List_t xPendingReadyList;						/*< Tasks that have been r
 
 #endif
 
-/* Global POSIX errno. Its value is changed upon context switching to match
+/* global POSIX errno. Its value is changed upon context switching to match
 the errno of the currently running task. */
 #if ( configUSE_POSIX_ERRNO == 1 )
 	int FreeRTOS_errno = 0;
