@@ -150,7 +150,7 @@
 
 /* IO definitions (access restrictions to peripheral registers) */
 /**
-    \defgroup CMSIS_glob_defs CMSIS global Defines
+    \defgroup CMSIS_glob_defs CMSIS Global Defines
 
     <strong>IO Type Qualifiers</strong> are used
     \li to specify the access to peripheral variables.

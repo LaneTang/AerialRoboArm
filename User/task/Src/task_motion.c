@@ -184,6 +184,7 @@ void TaskMotion_Entry(void *argument)
                 break;
 
             case MOTION_STATE_CLOSED_LOOP:
+            {
                 // A. Calculate Velocity
                 int16_t velocity = CalculateVelocity(raw_angle, prev_angle_raw);
                 prev_angle_raw = raw_angle;
@@ -202,6 +203,7 @@ void TaskMotion_Entry(void *argument)
                                   ctx.foc_algo.duty_b,
                                   ctx.foc_algo.duty_c);
                 break;
+            }
 
             case MOTION_STATE_ERROR:
             default:

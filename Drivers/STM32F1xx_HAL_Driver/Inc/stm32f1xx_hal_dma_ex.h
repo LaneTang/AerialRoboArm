@@ -106,7 +106,7 @@
    DMA_FLAG_TE5)
 
 /**
-  * @brief  Return the current DMA Channel global interrupt flag.
+  * @brief  Return the current DMA Channel Global interrupt flag.
   * @param  __HANDLE__: DMA handle
   * @retval The specified transfer error flag index.
   */
@@ -206,7 +206,7 @@
    DMA_FLAG_TE7)
 
 /**
-  * @brief  Return the current DMA Channel global interrupt flag.
+  * @brief  Return the current DMA Channel Global interrupt flag.
   * @param  __HANDLE__: DMA handle
   * @retval The specified transfer error flag index.
   */
@@ -227,7 +227,7 @@
   *            @arg DMA_FLAG_TCx:  Transfer complete flag
   *            @arg DMA_FLAG_HTx:  Half transfer complete flag
   *            @arg DMA_FLAG_TEx:  Transfer error flag
-  *            @arg DMA_FLAG_GLx:  global interrupt flag
+  *            @arg DMA_FLAG_GLx:  Global interrupt flag
   *         Where x can be 1_7 to select the DMA Channel flag.   
   * @retval The state of FLAG (SET or RESET).
   */
@@ -242,7 +242,7 @@
   *            @arg DMA_FLAG_TCx:  Transfer complete flag
   *            @arg DMA_FLAG_HTx:  Half transfer complete flag
   *            @arg DMA_FLAG_TEx:  Transfer error flag
-  *            @arg DMA_FLAG_GLx:  global interrupt flag
+  *            @arg DMA_FLAG_GLx:  Global interrupt flag
   *         Where x can be 1_7 to select the DMA Channel flag.   
   * @retval None
   */

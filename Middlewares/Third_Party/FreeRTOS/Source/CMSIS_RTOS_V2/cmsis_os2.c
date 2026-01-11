@@ -132,7 +132,7 @@ static osKernelState_t KernelState = osKernelInactive;
       { NULL,   0                     }
     };
   #else
-    /* global definition is provided to override default heap array */
+    /* Global definition is provided to override default heap array */
     extern HeapRegion_t configHEAP_5_REGIONS[];
   #endif
 #else

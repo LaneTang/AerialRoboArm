@@ -97,11 +97,13 @@ int main(void)
   MX_I2C1_Init();
   MX_TIM1_Init();
   MX_USART3_UART_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
     BSP_UART_Init(); // 确保串口先初始化，方便打印 Log
     App_Scheduler_Init();
 
-    BSP_UART_Printf("ARA System Initialized. Starting Kernel...\r\n");
+    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+//    BSP_UART_Printf("ARA System Initialized. Starting Kernel...\r\n");
   /* USER CODE END 2 */
 
   /* Init scheduler */

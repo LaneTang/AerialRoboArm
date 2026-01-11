@@ -3042,7 +3042,7 @@ typedef struct
 /*******************  Bit definition for DMA_ISR register  ********************/
 #define DMA_ISR_GIF1_Pos                    (0U)                               
 #define DMA_ISR_GIF1_Msk                    (0x1UL << DMA_ISR_GIF1_Pos)         /*!< 0x00000001 */
-#define DMA_ISR_GIF1                        DMA_ISR_GIF1_Msk                   /*!< Channel 1 global interrupt flag */
+#define DMA_ISR_GIF1                        DMA_ISR_GIF1_Msk                   /*!< Channel 1 Global interrupt flag */
 #define DMA_ISR_TCIF1_Pos                   (1U)                               
 #define DMA_ISR_TCIF1_Msk                   (0x1UL << DMA_ISR_TCIF1_Pos)        /*!< 0x00000002 */
 #define DMA_ISR_TCIF1                       DMA_ISR_TCIF1_Msk                  /*!< Channel 1 Transfer Complete flag */
@@ -3054,7 +3054,7 @@ typedef struct
 #define DMA_ISR_TEIF1                       DMA_ISR_TEIF1_Msk                  /*!< Channel 1 Transfer Error flag */
 #define DMA_ISR_GIF2_Pos                    (4U)                               
 #define DMA_ISR_GIF2_Msk                    (0x1UL << DMA_ISR_GIF2_Pos)         /*!< 0x00000010 */
-#define DMA_ISR_GIF2                        DMA_ISR_GIF2_Msk                   /*!< Channel 2 global interrupt flag */
+#define DMA_ISR_GIF2                        DMA_ISR_GIF2_Msk                   /*!< Channel 2 Global interrupt flag */
 #define DMA_ISR_TCIF2_Pos                   (5U)                               
 #define DMA_ISR_TCIF2_Msk                   (0x1UL << DMA_ISR_TCIF2_Pos)        /*!< 0x00000020 */
 #define DMA_ISR_TCIF2                       DMA_ISR_TCIF2_Msk                  /*!< Channel 2 Transfer Complete flag */
@@ -3066,7 +3066,7 @@ typedef struct
 #define DMA_ISR_TEIF2                       DMA_ISR_TEIF2_Msk                  /*!< Channel 2 Transfer Error flag */
 #define DMA_ISR_GIF3_Pos                    (8U)                               
 #define DMA_ISR_GIF3_Msk                    (0x1UL << DMA_ISR_GIF3_Pos)         /*!< 0x00000100 */
-#define DMA_ISR_GIF3                        DMA_ISR_GIF3_Msk                   /*!< Channel 3 global interrupt flag */
+#define DMA_ISR_GIF3                        DMA_ISR_GIF3_Msk                   /*!< Channel 3 Global interrupt flag */
 #define DMA_ISR_TCIF3_Pos                   (9U)                               
 #define DMA_ISR_TCIF3_Msk                   (0x1UL << DMA_ISR_TCIF3_Pos)        /*!< 0x00000200 */
 #define DMA_ISR_TCIF3                       DMA_ISR_TCIF3_Msk                  /*!< Channel 3 Transfer Complete flag */
@@ -3078,7 +3078,7 @@ typedef struct
 #define DMA_ISR_TEIF3                       DMA_ISR_TEIF3_Msk                  /*!< Channel 3 Transfer Error flag */
 #define DMA_ISR_GIF4_Pos                    (12U)                              
 #define DMA_ISR_GIF4_Msk                    (0x1UL << DMA_ISR_GIF4_Pos)         /*!< 0x00001000 */
-#define DMA_ISR_GIF4                        DMA_ISR_GIF4_Msk                   /*!< Channel 4 global interrupt flag */
+#define DMA_ISR_GIF4                        DMA_ISR_GIF4_Msk                   /*!< Channel 4 Global interrupt flag */
 #define DMA_ISR_TCIF4_Pos                   (13U)                              
 #define DMA_ISR_TCIF4_Msk                   (0x1UL << DMA_ISR_TCIF4_Pos)        /*!< 0x00002000 */
 #define DMA_ISR_TCIF4                       DMA_ISR_TCIF4_Msk                  /*!< Channel 4 Transfer Complete flag */
@@ -3090,7 +3090,7 @@ typedef struct
 #define DMA_ISR_TEIF4                       DMA_ISR_TEIF4_Msk                  /*!< Channel 4 Transfer Error flag */
 #define DMA_ISR_GIF5_Pos                    (16U)                              
 #define DMA_ISR_GIF5_Msk                    (0x1UL << DMA_ISR_GIF5_Pos)         /*!< 0x00010000 */
-#define DMA_ISR_GIF5                        DMA_ISR_GIF5_Msk                   /*!< Channel 5 global interrupt flag */
+#define DMA_ISR_GIF5                        DMA_ISR_GIF5_Msk                   /*!< Channel 5 Global interrupt flag */
 #define DMA_ISR_TCIF5_Pos                   (17U)                              
 #define DMA_ISR_TCIF5_Msk                   (0x1UL << DMA_ISR_TCIF5_Pos)        /*!< 0x00020000 */
 #define DMA_ISR_TCIF5                       DMA_ISR_TCIF5_Msk                  /*!< Channel 5 Transfer Complete flag */
@@ -3102,7 +3102,7 @@ typedef struct
 #define DMA_ISR_TEIF5                       DMA_ISR_TEIF5_Msk                  /*!< Channel 5 Transfer Error flag */
 #define DMA_ISR_GIF6_Pos                    (20U)                              
 #define DMA_ISR_GIF6_Msk                    (0x1UL << DMA_ISR_GIF6_Pos)         /*!< 0x00100000 */
-#define DMA_ISR_GIF6                        DMA_ISR_GIF6_Msk                   /*!< Channel 6 global interrupt flag */
+#define DMA_ISR_GIF6                        DMA_ISR_GIF6_Msk                   /*!< Channel 6 Global interrupt flag */
 #define DMA_ISR_TCIF6_Pos                   (21U)                              
 #define DMA_ISR_TCIF6_Msk                   (0x1UL << DMA_ISR_TCIF6_Pos)        /*!< 0x00200000 */
 #define DMA_ISR_TCIF6                       DMA_ISR_TCIF6_Msk                  /*!< Channel 6 Transfer Complete flag */
@@ -3114,7 +3114,7 @@ typedef struct
 #define DMA_ISR_TEIF6                       DMA_ISR_TEIF6_Msk                  /*!< Channel 6 Transfer Error flag */
 #define DMA_ISR_GIF7_Pos                    (24U)                              
 #define DMA_ISR_GIF7_Msk                    (0x1UL << DMA_ISR_GIF7_Pos)         /*!< 0x01000000 */
-#define DMA_ISR_GIF7                        DMA_ISR_GIF7_Msk                   /*!< Channel 7 global interrupt flag */
+#define DMA_ISR_GIF7                        DMA_ISR_GIF7_Msk                   /*!< Channel 7 Global interrupt flag */
 #define DMA_ISR_TCIF7_Pos                   (25U)                              
 #define DMA_ISR_TCIF7_Msk                   (0x1UL << DMA_ISR_TCIF7_Pos)        /*!< 0x02000000 */
 #define DMA_ISR_TCIF7                       DMA_ISR_TCIF7_Msk                  /*!< Channel 7 Transfer Complete flag */
@@ -3128,7 +3128,7 @@ typedef struct
 /*******************  Bit definition for DMA_IFCR register  *******************/
 #define DMA_IFCR_CGIF1_Pos                  (0U)                               
 #define DMA_IFCR_CGIF1_Msk                  (0x1UL << DMA_IFCR_CGIF1_Pos)       /*!< 0x00000001 */
-#define DMA_IFCR_CGIF1                      DMA_IFCR_CGIF1_Msk                 /*!< Channel 1 global interrupt clear */
+#define DMA_IFCR_CGIF1                      DMA_IFCR_CGIF1_Msk                 /*!< Channel 1 Global interrupt clear */
 #define DMA_IFCR_CTCIF1_Pos                 (1U)                               
 #define DMA_IFCR_CTCIF1_Msk                 (0x1UL << DMA_IFCR_CTCIF1_Pos)      /*!< 0x00000002 */
 #define DMA_IFCR_CTCIF1                     DMA_IFCR_CTCIF1_Msk                /*!< Channel 1 Transfer Complete clear */
@@ -3140,7 +3140,7 @@ typedef struct
 #define DMA_IFCR_CTEIF1                     DMA_IFCR_CTEIF1_Msk                /*!< Channel 1 Transfer Error clear */
 #define DMA_IFCR_CGIF2_Pos                  (4U)                               
 #define DMA_IFCR_CGIF2_Msk                  (0x1UL << DMA_IFCR_CGIF2_Pos)       /*!< 0x00000010 */
-#define DMA_IFCR_CGIF2                      DMA_IFCR_CGIF2_Msk                 /*!< Channel 2 global interrupt clear */
+#define DMA_IFCR_CGIF2                      DMA_IFCR_CGIF2_Msk                 /*!< Channel 2 Global interrupt clear */
 #define DMA_IFCR_CTCIF2_Pos                 (5U)                               
 #define DMA_IFCR_CTCIF2_Msk                 (0x1UL << DMA_IFCR_CTCIF2_Pos)      /*!< 0x00000020 */
 #define DMA_IFCR_CTCIF2                     DMA_IFCR_CTCIF2_Msk                /*!< Channel 2 Transfer Complete clear */
@@ -3152,7 +3152,7 @@ typedef struct
 #define DMA_IFCR_CTEIF2                     DMA_IFCR_CTEIF2_Msk                /*!< Channel 2 Transfer Error clear */
 #define DMA_IFCR_CGIF3_Pos                  (8U)                               
 #define DMA_IFCR_CGIF3_Msk                  (0x1UL << DMA_IFCR_CGIF3_Pos)       /*!< 0x00000100 */
-#define DMA_IFCR_CGIF3                      DMA_IFCR_CGIF3_Msk                 /*!< Channel 3 global interrupt clear */
+#define DMA_IFCR_CGIF3                      DMA_IFCR_CGIF3_Msk                 /*!< Channel 3 Global interrupt clear */
 #define DMA_IFCR_CTCIF3_Pos                 (9U)                               
 #define DMA_IFCR_CTCIF3_Msk                 (0x1UL << DMA_IFCR_CTCIF3_Pos)      /*!< 0x00000200 */
 #define DMA_IFCR_CTCIF3                     DMA_IFCR_CTCIF3_Msk                /*!< Channel 3 Transfer Complete clear */
@@ -3164,7 +3164,7 @@ typedef struct
 #define DMA_IFCR_CTEIF3                     DMA_IFCR_CTEIF3_Msk                /*!< Channel 3 Transfer Error clear */
 #define DMA_IFCR_CGIF4_Pos                  (12U)                              
 #define DMA_IFCR_CGIF4_Msk                  (0x1UL << DMA_IFCR_CGIF4_Pos)       /*!< 0x00001000 */
-#define DMA_IFCR_CGIF4                      DMA_IFCR_CGIF4_Msk                 /*!< Channel 4 global interrupt clear */
+#define DMA_IFCR_CGIF4                      DMA_IFCR_CGIF4_Msk                 /*!< Channel 4 Global interrupt clear */
 #define DMA_IFCR_CTCIF4_Pos                 (13U)                              
 #define DMA_IFCR_CTCIF4_Msk                 (0x1UL << DMA_IFCR_CTCIF4_Pos)      /*!< 0x00002000 */
 #define DMA_IFCR_CTCIF4                     DMA_IFCR_CTCIF4_Msk                /*!< Channel 4 Transfer Complete clear */
@@ -3176,7 +3176,7 @@ typedef struct
 #define DMA_IFCR_CTEIF4                     DMA_IFCR_CTEIF4_Msk                /*!< Channel 4 Transfer Error clear */
 #define DMA_IFCR_CGIF5_Pos                  (16U)                              
 #define DMA_IFCR_CGIF5_Msk                  (0x1UL << DMA_IFCR_CGIF5_Pos)       /*!< 0x00010000 */
-#define DMA_IFCR_CGIF5                      DMA_IFCR_CGIF5_Msk                 /*!< Channel 5 global interrupt clear */
+#define DMA_IFCR_CGIF5                      DMA_IFCR_CGIF5_Msk                 /*!< Channel 5 Global interrupt clear */
 #define DMA_IFCR_CTCIF5_Pos                 (17U)                              
 #define DMA_IFCR_CTCIF5_Msk                 (0x1UL << DMA_IFCR_CTCIF5_Pos)      /*!< 0x00020000 */
 #define DMA_IFCR_CTCIF5                     DMA_IFCR_CTCIF5_Msk                /*!< Channel 5 Transfer Complete clear */
@@ -3188,7 +3188,7 @@ typedef struct
 #define DMA_IFCR_CTEIF5                     DMA_IFCR_CTEIF5_Msk                /*!< Channel 5 Transfer Error clear */
 #define DMA_IFCR_CGIF6_Pos                  (20U)                              
 #define DMA_IFCR_CGIF6_Msk                  (0x1UL << DMA_IFCR_CGIF6_Pos)       /*!< 0x00100000 */
-#define DMA_IFCR_CGIF6                      DMA_IFCR_CGIF6_Msk                 /*!< Channel 6 global interrupt clear */
+#define DMA_IFCR_CGIF6                      DMA_IFCR_CGIF6_Msk                 /*!< Channel 6 Global interrupt clear */
 #define DMA_IFCR_CTCIF6_Pos                 (21U)                              
 #define DMA_IFCR_CTCIF6_Msk                 (0x1UL << DMA_IFCR_CTCIF6_Pos)      /*!< 0x00200000 */
 #define DMA_IFCR_CTCIF6                     DMA_IFCR_CTCIF6_Msk                /*!< Channel 6 Transfer Complete clear */
@@ -3200,7 +3200,7 @@ typedef struct
 #define DMA_IFCR_CTEIF6                     DMA_IFCR_CTEIF6_Msk                /*!< Channel 6 Transfer Error clear */
 #define DMA_IFCR_CGIF7_Pos                  (24U)                              
 #define DMA_IFCR_CGIF7_Msk                  (0x1UL << DMA_IFCR_CGIF7_Pos)       /*!< 0x01000000 */
-#define DMA_IFCR_CGIF7                      DMA_IFCR_CGIF7_Msk                 /*!< Channel 7 global interrupt clear */
+#define DMA_IFCR_CGIF7                      DMA_IFCR_CGIF7_Msk                 /*!< Channel 7 Global interrupt clear */
 #define DMA_IFCR_CTCIF7_Pos                 (25U)                              
 #define DMA_IFCR_CTCIF7_Msk                 (0x1UL << DMA_IFCR_CTCIF7_Pos)      /*!< 0x02000000 */
 #define DMA_IFCR_CTCIF7                     DMA_IFCR_CTCIF7_Msk                /*!< Channel 7 Transfer Complete clear */
@@ -5884,7 +5884,7 @@ typedef struct
 #define CAN_TDT0R_DLC                        CAN_TDT0R_DLC_Msk                 /*!< Data Length Code */
 #define CAN_TDT0R_TGT_Pos                    (8U)                              
 #define CAN_TDT0R_TGT_Msk                    (0x1UL << CAN_TDT0R_TGT_Pos)       /*!< 0x00000100 */
-#define CAN_TDT0R_TGT                        CAN_TDT0R_TGT_Msk                 /*!< Transmit global Time */
+#define CAN_TDT0R_TGT                        CAN_TDT0R_TGT_Msk                 /*!< Transmit Global Time */
 #define CAN_TDT0R_TIME_Pos                   (16U)                             
 #define CAN_TDT0R_TIME_Msk                   (0xFFFFUL << CAN_TDT0R_TIME_Pos)   /*!< 0xFFFF0000 */
 #define CAN_TDT0R_TIME                       CAN_TDT0R_TIME_Msk                /*!< Message Time Stamp */
@@ -5940,7 +5940,7 @@ typedef struct
 #define CAN_TDT1R_DLC                        CAN_TDT1R_DLC_Msk                 /*!< Data Length Code */
 #define CAN_TDT1R_TGT_Pos                    (8U)                              
 #define CAN_TDT1R_TGT_Msk                    (0x1UL << CAN_TDT1R_TGT_Pos)       /*!< 0x00000100 */
-#define CAN_TDT1R_TGT                        CAN_TDT1R_TGT_Msk                 /*!< Transmit global Time */
+#define CAN_TDT1R_TGT                        CAN_TDT1R_TGT_Msk                 /*!< Transmit Global Time */
 #define CAN_TDT1R_TIME_Pos                   (16U)                             
 #define CAN_TDT1R_TIME_Msk                   (0xFFFFUL << CAN_TDT1R_TIME_Pos)   /*!< 0xFFFF0000 */
 #define CAN_TDT1R_TIME                       CAN_TDT1R_TIME_Msk                /*!< Message Time Stamp */
@@ -5996,7 +5996,7 @@ typedef struct
 #define CAN_TDT2R_DLC                        CAN_TDT2R_DLC_Msk                 /*!< Data Length Code */
 #define CAN_TDT2R_TGT_Pos                    (8U)                              
 #define CAN_TDT2R_TGT_Msk                    (0x1UL << CAN_TDT2R_TGT_Pos)       /*!< 0x00000100 */
-#define CAN_TDT2R_TGT                        CAN_TDT2R_TGT_Msk                 /*!< Transmit global Time */
+#define CAN_TDT2R_TGT                        CAN_TDT2R_TGT_Msk                 /*!< Transmit Global Time */
 #define CAN_TDT2R_TIME_Pos                   (16U)                             
 #define CAN_TDT2R_TIME_Msk                   (0xFFFFUL << CAN_TDT2R_TIME_Pos)   /*!< 0xFFFF0000 */
 #define CAN_TDT2R_TIME                       CAN_TDT2R_TIME_Msk                /*!< Message Time Stamp */

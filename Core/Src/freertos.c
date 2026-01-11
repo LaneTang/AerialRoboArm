@@ -29,6 +29,7 @@
 #include "bsp_uart.h"
 #include "app_scheduler.h" // [添加]
 #include "task_motion.h"   // [添加]
+#include "test_console.h"
 #include <math.h> // 用于测试浮点打印
 /* USER CODE END Includes */
 
@@ -142,7 +143,7 @@ void StartDefaultTask(void *argument)
   /* USER CODE BEGIN StartDefaultTask */
     // [添加] 直接调用 ARA 的调度器入口
     // App_Scheduler_Entry 内部有 for(;;) 循环，所以不会返回
-    App_Scheduler_Entry(argument);
+//    App_Scheduler_Entry(argument);
 
     // 防御性代码，理论上永远不会运行到这里
   /* Infinite loop */
@@ -163,6 +164,8 @@ void StartDefaultTask(void *argument)
 void LogTask(void *argument)
 {
   /* USER CODE BEGIN LogTask */
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+//    TestConsole_TaskLoop();
 
     /* Infinite loop */
     for(;;)
@@ -187,15 +190,13 @@ void LogTask(void *argument)
 /* USER CODE END Header_MotorTask */
 void MotorTask(void *argument)
 {
-    // [添加] 直接调用 ARA 的运动控制入口
-    // TaskMotion_Entry 内部实现了 1kHz 的控制回路
-    TaskMotion_Entry(argument);
+  /* USER CODE BEGIN MotorTask */
 
 
-    /* Infinite loop */
+  /* Infinite loop */
   for(;;)
   {
-
+    osDelay(1);
   }
   /* USER CODE END MotorTask */
 }

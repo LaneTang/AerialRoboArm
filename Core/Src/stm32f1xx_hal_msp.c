@@ -58,7 +58,7 @@
 
 /* USER CODE END 0 */
 /**
-  * Initializes the global MSP.
+  * Initializes the Global MSP.
   */
 void HAL_MspInit(void)
 {
