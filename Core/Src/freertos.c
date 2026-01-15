@@ -164,15 +164,16 @@ void StartDefaultTask(void *argument)
 void LogTask(void *argument)
 {
   /* USER CODE BEGIN LogTask */
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
-//    TestConsole_TaskLoop();
+//    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+    TestConsole_Init();
+
 
     /* Infinite loop */
     for(;;)
     {
         // 示例：打印当前系统状态
-        // BSP_UART_Printf("SysSt: %d\r\n", App_Scheduler_GetState());
-        // BSP_UART_Printf("RunT: %s %s\r\n", __DATE__, __TIME__);
+        TestConsole_TaskLoop();
+
 
         osDelay(500);
     }

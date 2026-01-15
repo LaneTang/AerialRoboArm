@@ -16,6 +16,8 @@ typedef enum Layer_No{
 }Layer_No_t;
 
 // API
-void TestConsole_TaskLoop();
+void TestConsole_Init(void);
+
+void TestConsole_TaskLoop(void);
 
 #endif //FOC_DEMO2_TEST_CONSOLE_H

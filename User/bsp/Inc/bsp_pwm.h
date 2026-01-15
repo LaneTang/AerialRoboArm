@@ -11,7 +11,7 @@
 
 /* --- Configuration Constants --- */
 /* FOC PWM Period (ARR). Example: 72MHz / 3600 = 20kHz */
-#define BSP_PWM_MAX_DUTY    (3600)
+#define BSP_PWM_MAX_DUTY    (1440)
 
 /* --- Device Definition --- */
 typedef enum {
