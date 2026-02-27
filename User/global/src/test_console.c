@@ -26,7 +26,7 @@
 #define PID_KP           128
 #define PID_KI           10
 #define PID_KD           0
-#define VOLT_LIMIT       300  // 绝对输出限制 (Safe for 12V supply)
+#define VOLT_LIMIT       8000  // 绝对输出限制 (Safe for 12V supply - 32768 (using Q15) )
 
 /* --- Global Instances --- */
 static DrvAS5600_Context_t as5600_ctx;
@@ -76,7 +76,7 @@ void TestConsole_Init(void) {
 
     // 2. Init Algorithms
     AlgPid_Init(&pid_vel_ctx);
-    AlgPid_SetGains(&pid_vel_ctx, PID_KP, PID_KI, PID_KD, VOLT_LIMIT, 50000); // MaxOut, MaxInt
+    AlgPid_SetGains(&pid_vel_ctx, PID_KP, PID_KI, PID_KD, VOLT_LIMIT, 2000000); // MaxOut, MaxInt
 
     AlgFoc_Init(&foc_ctx, POLE_PAIRS, PWM_PERIOD);
 
@@ -100,7 +100,6 @@ void TestConsole_TaskLoop(void) {
         Loop_Control_Task();
     }
 
-    HAL_Delay(2); // 约 500Hz 循环
 }
 
 /* ==========================================
@@ -116,7 +115,7 @@ static void Auto_Align_Zero(void) {
     // 这里简单起见，直接调用 FOC Run(Angle=0, Uq=0, Ud=500)
     // 这里的 600 是对齐电压，必须足以克服摩擦力
     DrvBldc_Enable(&bldc_ctx, true);
-    AlgFoc_Run(&foc_ctx, 0, 0, 600);
+    AlgFoc_Run(&foc_ctx, 0, 0, 4000);
     DrvBldc_SetDuties(&bldc_ctx, foc_ctx.duty_a, foc_ctx.duty_b, foc_ctx.duty_c);
 
     // 2. 等待稳定 (700ms)
@@ -166,14 +165,35 @@ static void Update_Velocity(uint16_t current_raw) {
     prev_velocity_ts = now;
 }
 
+static uint8_t sensor_error_count = 0;
+
 static void Loop_Control_Task(void) {
-    // 1. 获取传感器数据
-    DrvAS5600_TriggerUpdate(&as5600_ctx);
-    // 这里简单轮询等待 (实际应在 Callback 中给信号量)
-    if (xSemaphoreTake(sem_as5600_done, pdMS_TO_TICKS(5)) != pdTRUE) {
-        return; // Skip this loop if sensor timeout
+    // 1. 发起读取请求并捕获底层状态
+    AraStatus_t trig_status = DrvAS5600_TriggerUpdate(&as5600_ctx);
+
+    if (trig_status != ARA_OK) {
+        // 错误A：底层 I2C 忙或设备离线 (例如返回 ARA_ERR_PARAM 意味着未初始化成功)
+        BSP_UART_Printf("[Err] Sensor Trigger Failed! Code: %d\r\n", trig_status);
+        vTaskDelay(pdMS_TO_TICKS(500)); // 降频防刷屏
+        return;
     }
+
+    // 2. 等待 DMA 中断释放信号量
+    if (xSemaphoreTake(sem_as5600_done, pdMS_TO_TICKS(10)) != pdTRUE) {
+        // 错误B：触发成功，但 DMA 中断没回来！
+        sensor_error_count++;
+        if(sensor_error_count > 5) {
+            BSP_UART_Printf("[Err] Sensor DMA Timeout! Interrupt missing?\r\n");
+            sensor_error_count = 0;
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+        return;
+    }
+    sensor_error_count = 0;
+
+    // 3. 获取数据
     uint16_t raw_angle = DrvAS5600_GetRawAngle(&as5600_ctx);
+    //BSP_UART_Printf("Raw Angle: %d\r\n", raw_angle);
 
     // 2. 更新速度估计
     Update_Velocity(raw_angle);
@@ -257,10 +277,10 @@ static void ExecuteCommand(char cmd) {
 
         case 't':
             current_mode = MODE_VOLTAGE_LOOP;
-            target_val = 400.0f; // 约 3.3V
+            target_val = 3000.0f; // 约 3.3V
             // 重置 PID 状态防止积分累积
             AlgPid_Reset(&pid_vel_ctx);
-            BSP_UART_Printf("MODE: Voltage FOC. Uq=400. Motor should accelerate.\r\n");
+            BSP_UART_Printf("MODE: Voltage FOC. Uq=3.1V. Motor should accelerate.\r\n");
             break;
 
         case 'c':

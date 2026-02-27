@@ -63,7 +63,7 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t vLogTaskHandle;
 const osThreadAttr_t vLogTask_attributes = {
   .name = "vLogTask",
-  .stack_size = 128 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for vMotorTask */
@@ -175,7 +175,7 @@ void LogTask(void *argument)
         TestConsole_TaskLoop();
 
 
-        osDelay(500);
+        osDelay(10);
     }
   /* USER CODE END LogTask */
 }

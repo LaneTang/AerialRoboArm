@@ -37,9 +37,11 @@ void DrvBldc_Enable(DrvBldc_Context_t *p_ctx, bool state)
 
     if (state) {
         // Enable Sequence:
-        // 1. Ensure PWMs are zero first to prevent "jump"
+        // 1. Inititialize PWM Timer, enable MOE pin
+        BSP_PWM_Init();
+        // 2. Ensure PWMs are zero first to prevent "jump"
         BSP_PWM_Set3PhaseDuty_U16(0, 0, 0);
-        // 2. Enable Driver Chip
+        // 3. Enable Driver Chip
         BSP_GPIO_Write(p_ctx->en_pin, true);
     } else {
         // Disable Sequence (Safety First):
