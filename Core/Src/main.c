@@ -102,6 +102,7 @@ int main(void)
   MX_TIM1_Init();
   MX_USART3_UART_Init();
   MX_TIM2_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
     BSP_UART_Init(); // 确保串口先初始化，方便打印 Log
     BSP_PWM_Init();

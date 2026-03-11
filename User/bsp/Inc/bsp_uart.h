@@ -12,6 +12,7 @@
 /* --- Device Definition --- */
 typedef enum {
     BSP_UART_DEBUG = 0,
+    BSP_UART_ELRS,      // <--- 新增此行，用于绑定接收机串口
     BSP_UART_NUM
 } BspUart_Dev_t;
 

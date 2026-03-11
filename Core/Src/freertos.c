@@ -29,7 +29,7 @@
 #include "bsp_uart.h"
 #include "app_scheduler.h" // [添加]
 #include "task_motion.h"   // [添加]
-#include "test_console.h"
+#include "test_rc_console.h"
 #include <math.h> // 用于测试浮点打印
 /* USER CODE END Includes */
 
@@ -165,17 +165,19 @@ void LogTask(void *argument)
 {
   /* USER CODE BEGIN LogTask */
 //    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
-    TestConsole_Init();
+//    TestConsole_Init();
+    TestRcConsole_Init();
 
 
     /* Infinite loop */
     for(;;)
     {
         // 示例：打印当前系统状态
-        TestConsole_TaskLoop();
+//        TestConsole_TaskLoop();
+        TestRcConsole_TaskLoop();
 
 
-        osDelay(10);
+        osDelay(20);
     }
   /* USER CODE END LogTask */
 }
