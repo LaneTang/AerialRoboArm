@@ -62,11 +62,15 @@ AraStatus_t ModRcSemantic_Init(ModRcSemantic_Context_t *p_ctx, const uint16_t *i
     }
 
     /* Prime the state variables to prevent false edge-triggers on boot */
-    p_ctx->se_last_state     = map_2pos(initial_chs[MOD_RC_IDX_SE]);
+    p_ctx->se_last_state = map_2pos(initial_chs[MOD_RC_IDX_SE]);
+    p_ctx->se_raw_state = p_ctx->se_last_state;
+    p_ctx->se_debounce_start_ms = 0;
     p_ctx->se_press_start_ms = 0;
     p_ctx->se_long_triggered = false;
+    p_ctx->se_pulse_end_ms = 0;
+    p_ctx->se_pulse_active = false;
 
-    p_ctx->sb_last_pos       = map_3pos(initial_chs[MOD_RC_IDX_SB]);
+    p_ctx->sb_last_pos = map_3pos(initial_chs[MOD_RC_IDX_SB]);
 
     return ARA_OK;
 }
@@ -111,39 +115,60 @@ AraStatus_t ModRcSemantic_Process(ModRcSemantic_Context_t *p_ctx,
     /* ---------------------------------------------------------
      * 2. Timing-based Semantics (SE - Arm Control)
      * --------------------------------------------------------- */
-    bool se_now = map_2pos(channels[MOD_RC_IDX_SE]);
+    bool se_sample = map_2pos(channels[MOD_RC_IDX_SE]);
 
     /* Default to HOLD every cycle unless explicitly overridden below */
     out_data->arm_cmd = ARM_CMD_HOLD;
 
-    /* Rising Edge: Just pressed */
-    if (!p_ctx->se_last_state && se_now) {
-        p_ctx->se_press_start_ms = current_tick_ms;
-        p_ctx->se_long_triggered = false;
+    /* Non-blocking debounce: mimic double-check-after-20ms without HAL_Delay */
+    if (se_sample != p_ctx->se_raw_state) {
+        p_ctx->se_raw_state = se_sample;
+        p_ctx->se_debounce_start_ms = current_tick_ms;
     }
 
-    /* Button is currently being held */
-    if (se_now) {
+    bool se_now = p_ctx->se_last_state;
+    if ((se_now != p_ctx->se_raw_state) &&
+        ((current_tick_ms - p_ctx->se_debounce_start_ms) >= MOD_RC_SE_DEBOUNCE_MS)) {
+        bool se_prev = p_ctx->se_last_state;
+        se_now = p_ctx->se_raw_state;
+        p_ctx->se_last_state = se_now;
+
+        /* Rising Edge: confirmed press */
+        if (!se_prev && se_now) {
+            p_ctx->se_press_start_ms = current_tick_ms;
+            p_ctx->se_long_triggered = false;
+        }
+        /* Falling Edge: confirmed release */
+        else if (se_prev && !se_now) {
+            uint32_t press_duration = current_tick_ms - p_ctx->se_press_start_ms;
+
+            if (!p_ctx->se_long_triggered && press_duration >= MOD_RC_SE_SHORT_PRESS_MIN_MS) {
+                /* Trigger pulse and set hold timer */
+                p_ctx->se_pulse_active = true;
+                p_ctx->se_pulse_end_ms = current_tick_ms + MOD_RC_SE_PULSE_HOLD_MS;
+            }
+        }
+    }
+
+    /* Check if pulse should be output (either just triggered or still holding) */
+    if (p_ctx->se_pulse_active) {
+        if (current_tick_ms < p_ctx->se_pulse_end_ms) {
+            out_data->arm_cmd = ARM_CMD_RETRACT;  // Hold pulse for multiple cycles
+        } else {
+            p_ctx->se_pulse_active = false;  // Pulse expired
+        }
+    }
+
+    /* Button is currently being held after debounce */
+    if (p_ctx->se_last_state) {
         uint32_t press_duration = current_tick_ms - p_ctx->se_press_start_ms;
 
         if (press_duration >= MOD_RC_SE_LONG_PRESS_MS) {
             out_data->arm_cmd = ARM_CMD_EXTEND;   // Continuous output while held
             p_ctx->se_long_triggered = true;
+            p_ctx->se_pulse_active = false;  // Cancel any pending pulse
         }
     }
-        /* Button is released */
-    else {
-        /* Falling Edge: Just released */
-        if (p_ctx->se_last_state && !se_now) {
-            uint32_t press_duration = current_tick_ms - p_ctx->se_press_start_ms;
-
-            /* If it wasn't a long press, and passes debounce, it's a short press */
-            if (!p_ctx->se_long_triggered && press_duration >= MOD_RC_SE_SHORT_PRESS_MIN_MS) {
-                out_data->arm_cmd = ARM_CMD_RETRACT;  // Pulse output for exactly 1 cycle
-            }
-        }
-    }
-    p_ctx->se_last_state = se_now;
 
 
     /* ---------------------------------------------------------

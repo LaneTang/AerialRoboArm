@@ -17,8 +17,10 @@
  * ========================================================= */
 
 /* Time thresholds for SE Button (Arm Control) */
-#define MOD_RC_SE_SHORT_PRESS_MIN_MS  (50U)   // Debounce threshold
-#define MOD_RC_SE_LONG_PRESS_MS       (800U)  // Long press trigger threshold
+#define MOD_RC_SE_DEBOUNCE_MS        (30U)   // Stable-state debounce window (increased for reliability)
+#define MOD_RC_SE_SHORT_PRESS_MIN_MS (30U)   // Minimum valid short-press width (reduced for better sensitivity)
+#define MOD_RC_SE_LONG_PRESS_MS      (800U)  // Long press trigger threshold
+#define MOD_RC_SE_PULSE_HOLD_MS      (100U)  // How long to hold the pulse output (for better detection)
 
 /* Channel Mapping Indices (CRSF array is 0-indexed) */
 #define MOD_RC_IDX_SA  4  // CH5: Mode Request (2-pos)
@@ -46,12 +48,16 @@
  */
 typedef struct {
     /* --- SE (Arm Control) Timing State --- */
-    bool     se_last_state;       // Previous physical state (true = pressed)
-    uint32_t se_press_start_ms;   // Tick when button was first pressed
-    bool     se_long_triggered;   // Flag to prevent repeated long-press triggers
+    bool     se_last_state;         // Previous debounced state (true = pressed)
+    bool     se_raw_state;          // Latest raw sampled state
+    uint32_t se_debounce_start_ms;  // Tick when raw state last changed
+    uint32_t se_press_start_ms;     // Tick when button was first pressed
+    bool     se_long_triggered;     // Flag to prevent repeated long-press triggers
+    uint32_t se_pulse_end_ms;       // Tick when pulse output should end
+    bool     se_pulse_active;       // Flag indicating pulse is being held
 
     /* --- SB (System Reset) Edge State --- */
-    uint8_t  sb_last_pos;         // Previous physical position (0=Up, 1=Mid, 2=Down)
+    uint8_t  sb_last_pos;           // Previous physical position (0=Up, 1=Mid, 2=Down)
 
 } ModRcSemantic_Context_t;
 
