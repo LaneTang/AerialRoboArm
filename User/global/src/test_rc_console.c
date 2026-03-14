@@ -17,6 +17,7 @@
 /* --- Configuration --- */
 #define CONSOLE_BUF_SIZE 64
 #define TEST_MOTOR_DUTY  300    // Safe open-loop testing duty cycle
+#define TEST_COMMUTATION_STEP_MS 8U
 
 /* --- Global Instances --- */
 static DrvElrs_Context_t       elrs_ctx;
@@ -37,11 +38,16 @@ typedef enum {
 
 static TestRcMode_e current_mode = MODE_IDLE;
 static RcControlData_t current_intent;
+static uint8_t motor_step_idx = 0;
+static uint32_t motor_step_ts = 0;
+static bool motor_output_enabled = false;
 
 /* --- Prototypes --- */
 static void PrintMenu(void);
 static void ExecuteCommand(char cmd);
 static void GenerateDefaultChannels(uint16_t *chs);
+static void ApplyMotorStep(uint8_t step_idx, bool forward);
+static void SetMotorOutputEnabled(bool enabled);
 
 /* ==========================================
  * Init
@@ -62,7 +68,7 @@ void TestRcConsole_Init(void) {
 
     /* 4. Init Motor Power Stage (For Linkage Test) */
     DrvBldc_Init(&bldc_ctx, BSP_GPIO_MOTOR_EN);
-    DrvBldc_Enable(&bldc_ctx, false);
+    SetMotorOutputEnabled(false);
 
     is_init = true;
     PrintMenu();
@@ -106,16 +112,17 @@ void TestRcConsole_TaskLoop(void) {
 
     switch (current_mode) {
         case MODE_IDLE:
-            DrvBldc_Enable(&bldc_ctx, false);
+            SetMotorOutputEnabled(false);
             break;
 
         case MODE_RAW_CHANNELS:
             if (should_print) {
-                BSP_UART_Printf("[L2] Link:%d | CH5:%04d | CH6:%04d | CH7:%04d | CH10:%04d\r\n",
+                BSP_UART_Printf("[L2] Link:%d | CH5:%04d | CH6:%04d | CH7:%04d | CH9:%04d | CH10:%04d\r\n",
                                 is_link_up,
                                 elrs_ctx.channels[MOD_RC_IDX_SA],
                                 elrs_ctx.channels[MOD_RC_IDX_SE],
                                 elrs_ctx.channels[MOD_RC_IDX_SC],
+                                elrs_ctx.channels[MOD_RC_IDX_SB],
                                 elrs_ctx.channels[MOD_RC_IDX_SD]);
             }
             break;
@@ -145,33 +152,43 @@ void TestRcConsole_TaskLoop(void) {
             /* Integration Test: RC -> Motor */
             if (current_intent.estop_state == ESTOP_ACTIVE) {
                 /* STRICT ESTOP: Kill power */
-                DrvBldc_Enable(&bldc_ctx, false);
-                BSP_PWM_StopAll();
+                SetMotorOutputEnabled(false);
+                motor_step_idx = 0;
                 if (should_print) BSP_UART_Printf("[SYS] EMERGENY STOP ACTIVE!\r\n");
             }
             else if (current_intent.req_mode == ARA_MODE_MANUAL) {
                 /* Manual Mode: Obey Arm Command */
-                DrvBldc_Enable(&bldc_ctx, true);
+                SetMotorOutputEnabled(true);
 
                 if (current_intent.arm_cmd == ARM_CMD_EXTEND) {
-                    /* Spin Forward (Open-loop test) */
-                    DrvBldc_SetDuties(&bldc_ctx, TEST_MOTOR_DUTY, 0, 0);
+                    if ((now_ms - motor_step_ts) >= TEST_COMMUTATION_STEP_MS) {
+                        motor_step_ts = now_ms;
+                        motor_step_idx = (uint8_t)((motor_step_idx + 1U) % 6U);
+                    }
+                    ApplyMotorStep(motor_step_idx, true);
                     if (should_print) BSP_UART_Printf("[SYS] Motor: EXTENDING >>>\r\n");
                 }
                 else if (current_intent.arm_cmd == ARM_CMD_RETRACT) {
-                    /* Spin Backward (Open-loop test) */
-                    DrvBldc_SetDuties(&bldc_ctx, 0, TEST_MOTOR_DUTY, 0);
+                    if ((now_ms - motor_step_ts) >= TEST_COMMUTATION_STEP_MS) {
+                        motor_step_ts = now_ms;
+                        motor_step_idx = (uint8_t)((motor_step_idx + 1U) % 6U);
+                    }
+                    ApplyMotorStep(motor_step_idx, false);
                     if (should_print) BSP_UART_Printf("[SYS] Motor: <<< RETRACTING (Pulse)\r\n");
                 }
                 else {
                     /* Hold */
                     DrvBldc_SetDuties(&bldc_ctx, 0, 0, 0);
+                    motor_step_idx = 0;
+                    motor_step_ts = now_ms;
                     if (should_print) BSP_UART_Printf("[SYS] Motor: HOLD\r\n");
                 }
             }
             else {
                 /* Auto Mode: Ignore Manual Arm Command */
                 DrvBldc_SetDuties(&bldc_ctx, 0, 0, 0);
+                motor_step_idx = 0;
+                motor_step_ts = now_ms;
                 if (should_print) BSP_UART_Printf("[SYS] Auto Mode: RC Ignored.\r\n");
             }
             break;
@@ -213,8 +230,7 @@ static void ExecuteCommand(char cmd) {
             break;
         case 'i':
             current_mode = MODE_IDLE;
-            DrvBldc_Enable(&bldc_ctx, false);
-            BSP_PWM_StopAll();
+            SetMotorOutputEnabled(false);
             BSP_UART_Printf("STOPPED.\r\n");
             break;
         case 'h': PrintMenu(); break;
@@ -228,3 +244,40 @@ static void GenerateDefaultChannels(uint16_t *chs) {
     }
     chs[MOD_RC_IDX_SD] = MOD_RC_SW_LOW - 100; // Default to E-STOP ACTIVE
 }
+
+static void ApplyMotorStep(uint8_t step_idx, bool forward)
+{
+    static const uint16_t step_table[6][3] = {
+            { TEST_MOTOR_DUTY, 0, 0 },
+            { TEST_MOTOR_DUTY, TEST_MOTOR_DUTY, 0 },
+            { 0, TEST_MOTOR_DUTY, 0 },
+            { 0, TEST_MOTOR_DUTY, TEST_MOTOR_DUTY },
+            { 0, 0, TEST_MOTOR_DUTY },
+            { TEST_MOTOR_DUTY, 0, TEST_MOTOR_DUTY }
+    };
+
+    uint8_t index = step_idx % 6U;
+    if (!forward) {
+        index = (uint8_t)((6U - index) % 6U);
+    }
+
+    DrvBldc_SetDuties(&bldc_ctx,
+                      step_table[index][0],
+                      step_table[index][1],
+                      step_table[index][2]);
+}
+
+static void SetMotorOutputEnabled(bool enabled)
+{
+    if (motor_output_enabled == enabled) {
+        return;
+    }
+
+    motor_output_enabled = enabled;
+    DrvBldc_Enable(&bldc_ctx, enabled);
+    if (!enabled) {
+        BSP_PWM_StopAll();
+    }
+}
+
+
