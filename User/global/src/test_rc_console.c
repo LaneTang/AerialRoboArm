@@ -16,8 +16,8 @@
 
 /* --- Configuration --- */
 #define CONSOLE_BUF_SIZE 64
-#define TEST_MOTOR_DUTY  300    // Safe open-loop testing duty cycle
-#define TEST_COMMUTATION_STEP_MS 8U
+#define TEST_MOTOR_DUTY  420    // Higher starting duty for the lower-KV 2808
+#define TEST_COMMUTATION_STEP_MS 12U
 
 /* --- Global Instances --- */
 static DrvElrs_Context_t       elrs_ctx;
@@ -279,5 +279,6 @@ static void SetMotorOutputEnabled(bool enabled)
         BSP_PWM_StopAll();
     }
 }
+
 
 
