@@ -117,11 +117,13 @@ void TestRcConsole_TaskLoop(void) {
 
         case MODE_RAW_CHANNELS:
             if (should_print) {
-                BSP_UART_Printf("[L2] Link:%d | CH5:%04d | CH6:%04d | CH7:%04d | CH9:%04d | CH10:%04d\r\n",
+                BSP_UART_Printf("[L2] Link:%d | CH1:%04d | CH5:%04d | CH7:%04d | CH8:%04d | CH9:%04d | CH10:%04d\r\n",
                                 is_link_up,
+                                elrs_ctx.channels[0], // CH1 (Roll)
                                 elrs_ctx.channels[MOD_RC_IDX_SA],
-                                elrs_ctx.channels[MOD_RC_IDX_SE],
+                                // elrs_ctx.channels[MOD_RC_IDX_SE], // CH6 (SE) temporarily hidden
                                 elrs_ctx.channels[MOD_RC_IDX_SC],
+                                elrs_ctx.channels[MOD_RC_IDX_SF],
                                 elrs_ctx.channels[MOD_RC_IDX_SB],
                                 elrs_ctx.channels[MOD_RC_IDX_SD]);
             }
@@ -279,6 +281,3 @@ static void SetMotorOutputEnabled(bool enabled)
         BSP_PWM_StopAll();
     }
 }
-
-
-

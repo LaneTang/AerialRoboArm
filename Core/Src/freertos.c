@@ -194,7 +194,12 @@ void LogTask(void *argument)
 void MotorTask(void *argument)
 {
   /* USER CODE BEGIN MotorTask */
+  BSP_UART_Printf("[MotorTask] Started\r\n");
 
+  TaskMotion_Init();
+  BSP_UART_Printf("[MotorTask] Init done\r\n");
+
+  TaskMotion_Entry(argument);
 
   /* Infinite loop */
   for(;;)

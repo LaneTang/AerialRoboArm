@@ -83,7 +83,7 @@ void TaskMotion_Init(void)
     // PID Controllers (Default safe gains, needs tuning)
     // Kp=1.0(256), Ki=0.01, Kd=0
     AlgPid_Init(&ctx.vel_pid);
-    AlgPid_SetGains(&ctx.vel_pid, 160, 8, 0, BSP_PWM_MAX_DUTY, BSP_PWM_MAX_DUTY);
+    AlgPid_SetGains(&ctx.vel_pid, 300, 8, 0, BSP_PWM_MAX_DUTY, BSP_PWM_MAX_DUTY);
 
     // 3. Initialize State
     ctx.state = MOTION_STATE_IDLE;
