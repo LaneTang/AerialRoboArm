@@ -63,7 +63,7 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t vLogTaskHandle;
 const osThreadAttr_t vLogTask_attributes = {
   .name = "vLogTask",
-  .stack_size = 512 * 4,
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for vMotorTask */
@@ -166,6 +166,7 @@ void LogTask(void *argument)
   /* USER CODE BEGIN LogTask */
 //    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
 //    TestConsole_Init();
+    BSP_UART_Printf("[LogTask] Started\r\n");
     TestRcConsole_Init();
 
 
@@ -194,12 +195,12 @@ void LogTask(void *argument)
 void MotorTask(void *argument)
 {
   /* USER CODE BEGIN MotorTask */
-  BSP_UART_Printf("[MotorTask] Started\r\n");
+//  BSP_UART_Printf("[MotorTask] Started\r\n");
+//
+//  TaskMotion_Init();
+//  BSP_UART_Printf("[MotorTask] Init done\r\n");
 
-  TaskMotion_Init();
-  BSP_UART_Printf("[MotorTask] Init done\r\n");
-
-  TaskMotion_Entry(argument);
+//  TaskMotion_Entry(argument);
 
   /* Infinite loop */
   for(;;)

@@ -6,6 +6,7 @@
 
 #include "task_motion.h"
 #include "FreeRTOS.h"
+#include "cmsis_os.h"
 #include "task.h"
 #include "semphr.h"
 #include "bsp_gpio.h" // For LED debug or EN pin
@@ -211,5 +212,7 @@ void TaskMotion_Entry(void *argument)
                 // System is locked. Requires Reset.
                 break;
         }
+
+        osDelay(1);
     }
 }

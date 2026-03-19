@@ -1,123 +1,115 @@
 /**
- * @file datahub.c
- * @brief Global Data Exchange Center (L4) Implementation
- * @note  Implements thread-safe access to system state and cross-task data.
+ * @file mod_datahub.c
+ * @brief Global Lock-Free Data Exchange Center Implementation (L4)
+ * @note  Strictly avoids FreeRTOS Mutexes to guarantee 1000Hz FOC timing.
+ * Utilizes Cortex-M3 taskENTER_CRITICAL() for atomic memcpy.
  */
 
 #include "datahub.h"
-#include <string.h>
-
-/* [FreeRTOS Includes] */
 #include "FreeRTOS.h"
-#include "semphr.h"
 #include "task.h"
+#include <string.h> // Required for fast memcpy
+#include <stddef.h> // Required for NULL
 
 /* =========================================================
- * Internal Storage (The "Blackboard")
+ * 1. Static Memory Allocation (The "Blackboard")
  * ========================================================= */
 
-/* 1. Global System Mode */
-static AraSysMode_t    global_sys_mode;
-
-/* 2. RC Semantic Data Cache */
-static RcControlData_t global_rc_data;
-
-/* =========================================================
- * IPC Resources (Inter-Process Communication)
- * ========================================================= */
-
-/* Mutex to protect the RC Control Data struct */
-static SemaphoreHandle_t rc_data_mutex = NULL;
-
-/* * Note on `global_sys_mode`:
- * Since AraSysMode_t is a standard enum (32-bit integer on ARM Cortex-M3),
- * its assignment is natively atomic. However, to be perfectly strict and
- * prevent any compiler reordering issues, we will use FreeRTOS Critical
- * Sections (taskENTER_CRITICAL) which are ultra-fast for simple variable access.
+/* * These static instances reside in the BSS/Data segment.
+ * They are the single source of truth for inter-thread data.
  */
-
+static DataHub_Cmd_t   s_cmd_hub;
+static DataHub_State_t s_state_hub;
 
 /* =========================================================
- * API Implementation
+ * 2. Interface Implementation
  * ========================================================= */
 
+/**
+ * @brief Initialize DataHub Memory
+ */
 void DataHub_Init(void)
 {
-    /* 1. Initialize System Mode to Safe Boot State */
-    global_sys_mode = ARA_MODE_INIT;
+    // Zero out the entire memory block first
+    memset(&s_cmd_hub, 0, sizeof(DataHub_Cmd_t));
+    memset(&s_state_hub, 0, sizeof(DataHub_State_t));
 
-    /* 2. Initialize RC Data to Safe Defaults (Failsafe) */
-    memset(&global_rc_data, 0, sizeof(RcControlData_t));
-    global_rc_data.is_link_up  = false;
-    global_rc_data.estop_state = ESTOP_ACTIVE;  // System locked by default
-    global_rc_data.arm_cmd     = ARM_CMD_HOLD;
-    global_rc_data.gripper_cmd = GRIPPER_CMD_STOP;
+    // Force safe default states (Critical for hardware safety on boot)
+    s_cmd_hub.sys_mode = ARA_MODE_INIT;
+    s_cmd_hub.emergency_stop = true;      // Default to E-STOP until explicitly cleared
+    s_cmd_hub.target_foc_angle = 0;
 
-    /* 3. Create Mutex for complex structs */
-    rc_data_mutex = xSemaphoreCreateMutex();
-
-    /* Ensure mutex creation was successful */
-    configASSERT(rc_data_mutex != NULL);
+    // Initialize state to zero/safe values
+    s_state_hub.current_foc_angle = 0;
+    s_state_hub.current_velocity = 0;
+    // Assuming 0 equates to ARA_OK or equivalent success state in AraStatus_t
+    s_state_hub.foc_status = 0;
 }
 
-AraSysMode_t DataHub_GetSysMode(void)
+/**
+ * @brief Write Downlink Command to DataHub
+ */
+void DataHub_WriteCmd(const DataHub_Cmd_t *p_cmd)
 {
-    AraSysMode_t mode;
+    if (p_cmd == NULL) {
+        return; // Guard against null pointer dereference
+    }
 
-    /* Fast critical section for single variable read */
+    // Mask all interrupts (up to configMAX_SYSCALL_INTERRUPT_PRIORITY)
     taskENTER_CRITICAL();
-    mode = global_sys_mode;
+    {
+        // Cortex-M3 optimized memcpy.
+        // Size is approx 8 bytes, takes < 10 CPU cycles (<< 1us).
+        memcpy(&s_cmd_hub, p_cmd, sizeof(DataHub_Cmd_t));
+    }
+    // Unmask interrupts
     taskEXIT_CRITICAL();
-
-    return mode;
 }
 
-AraStatus_t DataHub_SetSysMode(AraSysMode_t mode)
+/**
+ * @brief Read Downlink Command from DataHub
+ */
+void DataHub_ReadCmd(DataHub_Cmd_t *p_cmd)
 {
-    /* Fast critical section for single variable write */
+    if (p_cmd == NULL) {
+        return;
+    }
+
     taskENTER_CRITICAL();
-    global_sys_mode = mode;
+    {
+        memcpy(p_cmd, &s_cmd_hub, sizeof(DataHub_Cmd_t));
+    }
     taskEXIT_CRITICAL();
-
-    return ARA_OK;
 }
 
-AraStatus_t DataHub_WriteRcData(const RcControlData_t *p_rc_data)
+/**
+ * @brief Write Uplink State to DataHub
+ */
+void DataHub_WriteState(const DataHub_State_t *p_state)
 {
-    if (p_rc_data == NULL || rc_data_mutex == NULL) {
-        return ARA_ERR_PARAM;
+    if (p_state == NULL) {
+        return;
     }
 
-    /* Wait up to 10ms to acquire the Mutex */
-    if (xSemaphoreTake(rc_data_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-        /* Safe Memory Copy */
-        memcpy(&global_rc_data, p_rc_data, sizeof(RcControlData_t));
-
-        /* Release the Mutex */
-        xSemaphoreGive(rc_data_mutex);
-        return ARA_OK;
+    taskENTER_CRITICAL();
+    {
+        memcpy(&s_state_hub, p_state, sizeof(DataHub_State_t));
     }
-
-    /* Mutex timeout (another task held it too long) */
-    return ARA_BUSY;
+    taskEXIT_CRITICAL();
 }
 
-AraStatus_t DataHub_ReadRcData(RcControlData_t *p_rc_data)
+/**
+ * @brief Read Uplink State from DataHub
+ */
+void DataHub_ReadState(DataHub_State_t *p_state)
 {
-    if (p_rc_data == NULL || rc_data_mutex == NULL) {
-        return ARA_ERR_PARAM;
+    if (p_state == NULL) {
+        return;
     }
 
-    /* Wait up to 10ms to acquire the Mutex */
-    if (xSemaphoreTake(rc_data_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-        /* Safe Memory Copy */
-        memcpy(p_rc_data, &global_rc_data, sizeof(RcControlData_t));
-
-        /* Release the Mutex */
-        xSemaphoreGive(rc_data_mutex);
-        return ARA_OK;
+    taskENTER_CRITICAL();
+    {
+        memcpy(p_state, &s_state_hub, sizeof(DataHub_State_t));
     }
-
-    /* Mutex timeout */
-    return ARA_BUSY;
+    taskEXIT_CRITICAL();
 }

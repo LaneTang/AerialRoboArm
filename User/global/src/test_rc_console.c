@@ -13,6 +13,7 @@
 #include "mod_rc_semantic.h"    // L3
 #include "datahub.h"            // L4 Blackboard
 #include "drv_bldc_power.h"     // L2 Actuator (For Integration Test)
+#include "alg_voltage_foc.h"
 
 /* --- Configuration --- */
 #define CONSOLE_BUF_SIZE 64
@@ -23,6 +24,7 @@
 static DrvElrs_Context_t       elrs_ctx;
 static ModRcSemantic_Context_t semantic_ctx;
 static DrvBldc_Context_t       bldc_ctx;
+static AlgFoc_Context_t        foc_ctx; // [新增] FOC 上下文
 
 static uint8_t rx_buffer[CONSOLE_BUF_SIZE];
 static bool    is_init = false;
@@ -66,10 +68,14 @@ void TestRcConsole_Init(void) {
     GenerateDefaultChannels(default_chs);
     ModRcSemantic_Init(&semantic_ctx, default_chs);
 
-    /* 4. Init Motor Power Stage (For Linkage Test) */
+    /* 4. Init Motor Power Stage */
     DrvBldc_Init(&bldc_ctx, BSP_GPIO_MOTOR_EN);
-    SetMotorOutputEnabled(false);
 
+    /* 5. [新增] Init FOC Algorithm */
+    // 极对数 7, PWM ARR周期 1440
+    AlgFoc_Init(&foc_ctx, 7, BSP_PWM_MAX_DUTY);
+
+    SetMotorOutputEnabled(false);
     is_init = true;
     PrintMenu();
 }
@@ -106,6 +112,14 @@ void TestRcConsole_TaskLoop(void) {
     /* Write to DataHub for MODE_DATAHUB test */
     DataHub_WriteRcData(&current_intent);
 
+    /* FOC 运行参数 (由于目前没有 AS5600，我们采用强拖模式产生开环旋转角) */
+    static uint16_t virtual_mech_angle = 0; // 0-4095
+    int16_t target_uq = 0;                  // 目标力矩电压 (Q15: -32768 ~ 32767)
+
+    // 假设 VBUS = 12V. 我们限制最大输出电压到 15% VBUS 左右 (防烧电机)
+    // 32768 * 15% ≈ 4915 (与你的 ALIGN_VOLTAGE_Q15 类似)
+    const int16_t MAX_TEST_UQ = 4915;
+
     /* 4. Execute Mode Logic & Print Telemetry (Decimated) */
     static uint32_t print_ts = 0;
     bool should_print = (now_ms - print_ts > 200); // 5Hz Print Rate
@@ -121,7 +135,7 @@ void TestRcConsole_TaskLoop(void) {
                                 is_link_up,
                                 elrs_ctx.channels[0], // CH1 (Roll)
                                 elrs_ctx.channels[MOD_RC_IDX_SA],
-                                // elrs_ctx.channels[MOD_RC_IDX_SE], // CH6 (SE) temporarily hidden
+                        // elrs_ctx.channels[MOD_RC_IDX_SE], // CH6 (SE) temporarily hidden
                                 elrs_ctx.channels[MOD_RC_IDX_SC],
                                 elrs_ctx.channels[MOD_RC_IDX_SF],
                                 elrs_ctx.channels[MOD_RC_IDX_SB],
@@ -151,46 +165,52 @@ void TestRcConsole_TaskLoop(void) {
             break;
 
         case MODE_MOTOR_LINK:
-            /* Integration Test: RC -> Motor */
+            /* Integration Test: RC -> Smooth FOC Motor */
             if (current_intent.estop_state == ESTOP_ACTIVE) {
-                /* STRICT ESTOP: Kill power */
                 SetMotorOutputEnabled(false);
-                motor_step_idx = 0;
                 if (should_print) BSP_UART_Printf("[SYS] EMERGENY STOP ACTIVE!\r\n");
-            }
-            else if (current_intent.req_mode == ARA_MODE_MANUAL) {
-                /* Manual Mode: Obey Arm Command */
+            } else if (current_intent.req_mode == ARA_MODE_MANUAL) {
                 SetMotorOutputEnabled(true);
 
-                if (current_intent.arm_cmd == ARM_CMD_EXTEND) {
-                    if ((now_ms - motor_step_ts) >= TEST_COMMUTATION_STEP_MS) {
-                        motor_step_ts = now_ms;
-                        motor_step_idx = (uint8_t)((motor_step_idx + 1U) % 6U);
-                    }
-                    ApplyMotorStep(motor_step_idx, true);
-                    if (should_print) BSP_UART_Printf("[SYS] Motor: EXTENDING >>>\r\n");
+                // 1. 获取遥控器 CH1 (右摇杆左右) 的原始值 (映射为百分比 -100 ~ 100)
+                // 注意：在 mod_rc_semantic 中内部有 map_ch1_percent，但外部没有暴露
+                // 为了平滑控制，我们直接读取 elrs_ctx 的原始通道值计算比例
+                int32_t ch1_raw = (int32_t) elrs_ctx.channels[0]; // CH1
+                int32_t ch1_delta = ch1_raw - MOD_RC_VAL_MID;    // 以 1500 为中点
+
+                // 死区过滤 (摇杆回中时有一点偏差)
+                if (ch1_delta > -50 && ch1_delta < 50) {
+                    ch1_delta = 0;
                 }
-                else if (current_intent.arm_cmd == ARM_CMD_RETRACT) {
-                    if ((now_ms - motor_step_ts) >= TEST_COMMUTATION_STEP_MS) {
-                        motor_step_ts = now_ms;
-                        motor_step_idx = (uint8_t)((motor_step_idx + 1U) % 6U);
-                    }
-                    ApplyMotorStep(motor_step_idx, false);
-                    if (should_print) BSP_UART_Printf("[SYS] Motor: <<< RETRACTING (Pulse)\r\n");
+
+                if (ch1_delta != 0) {
+                    // 2. 将摇杆量映射为转速 (角度增量)
+                    // 推得越多，加的角度越多，转得越快。
+                    // 增量范围大致在 +/- 1 到 +/- 20 之间 (根据你想要的丝滑程度调整)
+                    int16_t angle_step = (int16_t) (ch1_delta / 20);
+
+                    virtual_mech_angle = (virtual_mech_angle + angle_step) & 0x0FFF; // 模 4096
+
+                    // 3. 将摇杆量映射为 Uq (力矩)
+                    // 如果推满 (delta=500)，Uq = MAX_TEST_UQ
+                    target_uq = (int16_t) ((ch1_delta * MAX_TEST_UQ) / 500);
+
+                    if (should_print)
+                        BSP_UART_Printf("[SYS] Moving | Uq:%d | Ang:%d\r\n", target_uq, virtual_mech_angle);
+                } else {
+                    /* Hold 状态：提供一个微小的锁定 Uq 或者 Uq=0，角度不变 */
+                    target_uq = 1000; // 给一点点电流锁住位置
+                    if (should_print) BSP_UART_Printf("[SYS] Motor: HOLD (FOC Locked)\r\n");
                 }
-                else {
-                    /* Hold */
-                    DrvBldc_SetDuties(&bldc_ctx, 0, 0, 0);
-                    motor_step_idx = 0;
-                    motor_step_ts = now_ms;
-                    if (should_print) BSP_UART_Printf("[SYS] Motor: HOLD\r\n");
-                }
-            }
-            else {
-                /* Auto Mode: Ignore Manual Arm Command */
+
+                // --- 执行 FOC 核心算法 ---
+                // 参数：上下文, 虚拟机械角度(0-4095), Uq(力矩电压), Ud(磁链电压=0)
+                AlgFoc_Run(&foc_ctx, virtual_mech_angle, target_uq, 0);
+
+                // --- 写入底层 PWM ---
+                DrvBldc_SetDuties(&bldc_ctx, foc_ctx.duty_a, foc_ctx.duty_b, foc_ctx.duty_c);
+            } else {
                 DrvBldc_SetDuties(&bldc_ctx, 0, 0, 0);
-                motor_step_idx = 0;
-                motor_step_ts = now_ms;
                 if (should_print) BSP_UART_Printf("[SYS] Auto Mode: RC Ignored.\r\n");
             }
             break;
