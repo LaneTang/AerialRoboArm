@@ -84,7 +84,7 @@
 
 ---
 
-### 🗺️ 全新开发规划：Demo_v5 (Roadmap Revised)
+### 🗺️ 开发规划：Demo_v6 (Roadmap)
 
 结合“先基建、再 Mock 业务”的思路，将未来的工作流切分为四个具有绝对因果关系的 Phase。
 
@@ -95,7 +95,7 @@
     2.  设计并实现 L3 `mod_logger.h/.c`（基于环形缓冲区与 DMA 触发）。
     3.  重构 L5 `app_threads.c` 中的看门狗逻辑，接入分级异常降级状态机。
 
-#### **Phase 2: 业务链路 Mock 贯通 (ARA-VSP Agile Testing)**
+#### **Phase 2: 桌面级白盒测试 业务链路 Mock (ARA-VSP Agile Testing)**
 * **目标**：在不连接真实视觉硬件的情况下，纯靠逻辑跑通“视觉事件 -> 机械臂决策 -> 运动指令”的全链路。
 * **行动项**：
     1.  完善 `task_mock_vision.c`，使用脚本注入预设的 `ARA-VSP` 极值情况（如突然断联、目标瞬间跳变）。
