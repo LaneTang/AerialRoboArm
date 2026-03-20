@@ -1,42 +1,47 @@
 /**
  * @file task_rc.c
- * @brief RC Data Collection and Semantic Dispatch Task (L4) Implementation
- * @note  FreeRTOS Task. Integrates DRV_ELRS (L2) and MOD_RC_SEMANTIC (L3).
+ * @brief RC Data Collection & Semantic Logic (L4) Implementation
+ * @note  Strictly C99. Zero RTOS dependencies.
+ * Extracts high-level intent from raw L2 ELRS data via L3 Semantic module.
+ * @author ARA Project Coder
  */
 
 #include "task_rc.h"
-#include "FreeRTOS.h"
-#include "task.h"
-#include <string.h>
+#include "bsp_uart.h"  /* For BSP_UART_ELRS */
+#include <string.h>    /* For memset */
 
 /* =========================================================
- * Internal Context Instance
+ * 1. Internal Context Allocation
  * ========================================================= */
-/* Static allocation to avoid dynamic memory (malloc) after initialization */
-static TaskRc_Context_t rc_ctx;
+
+/* Singleton context for the RC task (Definition comes from task_rc.h) */
+static TaskRc_Context_t s_rc_ctx;
 
 /* =========================================================
- * Internal Helper Functions
+ * 2. Private Helper Functions
  * ========================================================= */
 
 /**
  * @brief Helper to generate a safe default channel array for initialization
+ * @note  Sets all sticks to center (992) and forces E-Stop channel to Active (Low).
  */
 static void generate_default_channels(uint16_t *channels)
 {
     for (int i = 0; i < DRV_ELRS_MAX_CHANNELS; i++) {
-        channels[i] = MOD_RC_VAL_MID; // 992 (Neutral position)
+        channels[i] = MOD_RC_VAL_MID; /* 992 */
     }
-    /* E-Stop Channel (SD): Default to UP (Low value) -> ACTIVE for safety */
-    channels[MOD_RC_IDX_SD] = MOD_RC_SW_LOW - 100;
+    /* E-Stop Channel (CH10 / Index 9): Default to UP (Low value) -> ACTIVE for safety */
+    channels[9] = MOD_RC_SW_LOW - 100;
 }
 
 /**
- * @brief Helper to apply Failsafe values when link is lost
+ * @brief Helper to apply Failsafe values when link is lost or uninitialized
  */
 static void apply_failsafe_intent(RcControlData_t *intent)
 {
-    intent->is_link_up      = false;
+    memset(intent, 0, sizeof(RcControlData_t));
+
+    intent->is_link_up      = false;              // REPLACED old is_failsafe logic
     intent->req_mode        = ARA_MODE_IDLE;      // Force system out of Auto/Manual
     intent->estop_state     = ESTOP_ACTIVE;       // CRITICAL: Lock all actuators
     intent->arm_cmd         = ARM_CMD_HOLD;       // Stop arm movement
@@ -45,75 +50,62 @@ static void apply_failsafe_intent(RcControlData_t *intent)
     intent->aux_knob_val    = 0;
 }
 
-
 /* =========================================================
- * API Implementation
+ * 3. API Implementation
  * ========================================================= */
 
 void TaskRc_Init(void)
 {
     /* Clear context memory */
-    memset(&rc_ctx, 0, sizeof(TaskRc_Context_t));
+    memset(&s_rc_ctx, 0, sizeof(TaskRc_Context_t));
 
     /* 1. Initialize L2 Driver (Bind to ELRS UART) */
-    AraStatus_t l2_status = DrvElrs_Init(&rc_ctx.elrs_driver, BSP_UART_ELRS);
+    AraStatus_t l2_status = DrvElrs_Init(&s_rc_ctx.elrs_driver, BSP_UART_ELRS);
 
     /* 2. Initialize L3 Semantic Logic */
     uint16_t default_chs[DRV_ELRS_MAX_CHANNELS];
     generate_default_channels(default_chs);
-    AraStatus_t l3_status = ModRcSemantic_Init(&rc_ctx.semantic_logic, default_chs);
+    AraStatus_t l3_status = ModRcSemantic_Init(&s_rc_ctx.semantic_logic, default_chs);
 
     /* Mark as initialized only if both components are OK */
     if (l2_status == ARA_OK && l3_status == ARA_OK) {
-        rc_ctx.is_initialized = true;
+        s_rc_ctx.is_initialized = true;
     }
 }
 
-void TaskRc_Entry(void *argument)
+void TaskRc_Update(uint32_t current_tick_ms, RcControlData_t *p_out_intent)
 {
-    /* Prevent running if not properly initialized */
-    if (!rc_ctx.is_initialized) {
-        vTaskDelete(NULL);
+    /* Parameter Guard */
+    if (p_out_intent == NULL) {
+        return;
     }
 
-    /* FreeRTOS Absolute Delay Setup */
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(TASK_RC_PERIOD_MS);
+    /* Hardware Init Guard */
+    if (!s_rc_ctx.is_initialized) {
+        apply_failsafe_intent(p_out_intent);
+        return;
+    }
 
-    /* Task Main Loop */
-    for (;;)
-    {
-        /* 1. Wait for the next cycle (e.g., 20ms = 50Hz) */
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    /* 1. Update L2 Driver (Reads UART RingBuffer, Checks CRC & Timeout) */
+    DrvElrs_Update(&s_rc_ctx.elrs_driver, current_tick_ms);
 
-        /* 2. Get current system time in ms */
-        /* Assuming configTICK_RATE_HZ == 1000, TickCount is exactly ms */
-        uint32_t current_tick_ms = (uint32_t)xTaskGetTickCount();
+    /* 2. Check Link Status */
+    if (DrvElrs_IsLinkUp(&s_rc_ctx.elrs_driver)) {
 
-        /* 3. Update L2 Driver (Reads UART RingBuffer, Checks CRC & Timeout) */
-        DrvElrs_Update(&rc_ctx.elrs_driver, current_tick_ms);
+        /* Clear the output struct before population */
+        memset(p_out_intent, 0, sizeof(RcControlData_t));
 
-        /* 4. Check Link Status & Process Semantics */
-        bool link_is_up = DrvElrs_IsLinkUp(&rc_ctx.elrs_driver);
+        /* Link is healthy: Translate raw channels to Semantic Intents via L3 */
+        ModRcSemantic_Process(&s_rc_ctx.semantic_logic,
+                              s_rc_ctx.elrs_driver.channels,
+                              current_tick_ms,
+                              p_out_intent);
 
-        /* Start with a clean slate for the new intent */
-        memset(&rc_ctx.last_intent, 0, sizeof(RcControlData_t));
+        /* Explicitly assert link up state */
+        p_out_intent->is_link_up = true;
 
-        if (link_is_up) {
-            /* Link is healthy: Translate raw channels to Semantic Intents via L3 */
-            ModRcSemantic_Process(&rc_ctx.semantic_logic,
-                                  rc_ctx.elrs_driver.channels,
-                                  current_tick_ms,
-                                  &rc_ctx.last_intent);
-
-            rc_ctx.last_intent.is_link_up = true;
-        } else {
-            /* Link is lost: Enforce hardware failsafe semantics */
-            apply_failsafe_intent(&rc_ctx.last_intent);
-        }
-
-        /* 5. Publish Intent to Global DataHub */
-        /* L5 Scheduler and TaskMotion will read this in their own cycles */
-        DataHub_WriteRcData(&rc_ctx.last_intent);
+    } else {
+        /* Link is lost: Enforce hardware failsafe semantics */
+        apply_failsafe_intent(p_out_intent);
     }
 }

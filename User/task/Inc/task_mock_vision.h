@@ -1,79 +1,49 @@
 /**
  * @file task_mock_vision.h
- * @brief Vision Mock Gateway Task (L4) for Agile Testing
- * @note  Replaces task_vision.h during development. Injects deterministic
- * test vectors into the DataHub to verify Task_Manipulator logic
- * without needing the actual PC/Camera hardware.
+ * @brief Vision Mock Gateway (L4) - Downgraded to Runnable
+ * @note  Injects deterministic test vectors into the system for Desktop Testing.
  */
 
 #ifndef TASK_MOCK_VISION_H
 #define TASK_MOCK_VISION_H
 
 #include "ara_def.h"
-#include "datahub_vision_ext.h" /* To inject AraVisionData_t */
+#include "mod_vsp_parser.h" /* For AraVisionData_t */
 
-/* =========================================================
- * 1. Mock Test Scenarios
- * ========================================================= */
-
-/**
- * @brief Pre-defined testing scenarios (Test Vectors)
- */
+/* --- Mock Scenarios --- */
 typedef enum {
-    MOCK_SCENARIO_IDLE = 0,         // Sends nothing (tests timeout/watchdog)
-
-    MOCK_SCENARIO_HAPPY_PATH,       // Standard successful grab:
-    // Track -> Align -> Reach Deadband -> Wait -> Grab -> Retract
-
-    MOCK_SCENARIO_TARGET_LOST,      // Target appears, then disappears midway (tests Fallback logic)
-
-    MOCK_SCENARIO_WIFI_JITTER,      // Simulates network latency (sends frames randomly between 20ms-400ms)
-
-    MOCK_SCENARIO_PC_ESTOP,         // Triggers the PC Emergency Stop flag suddenly
-
-    MOCK_SCENARIO_NUM
+    MOCK_SCENARIO_IDLE = 0,
+    MOCK_SCENARIO_HAPPY_PATH,       // Track -> Align -> Grab -> Retract
+    MOCK_SCENARIO_TARGET_LOST,
+    MOCK_SCENARIO_WIFI_JITTER,
+    MOCK_SCENARIO_PC_ESTOP          // Force Emergency Stop
 } MockScenario_t;
 
-/* =========================================================
- * 2. Task Context Structure
- * ========================================================= */
-
-/**
- * @brief Mock Task Context
- */
+/* --- Logic Context --- */
 typedef struct {
     MockScenario_t  current_scenario;
     uint32_t        scenario_start_tick;
-    uint32_t        step_counter;       // Internal state for the current test script
-
-    AraVisionData_t mock_payload;       // The dummy data to be injected
+    uint32_t        step_counter;
 } TaskMockVision_Context_t;
 
-/* =========================================================
- * 3. Module API
- * ========================================================= */
+/* --- API --- */
 
 /**
- * @brief Initialize the Mock Vision Task
- * @note  Replaces TaskVision_Init() in main.c when ENABLE_MOCK_VISION is defined.
+ * @brief Initialize Mock Scenario runner.
  */
 void TaskMockVision_Init(void);
 
 /**
- * @brief Main Mock Task Entry Point (FreeRTOS Task)
- * @param argument Task parameters
- * @note  Runs at 20Hz (50ms). Generates mock AraVisionData_t based on the
- * current scenario script and pushes it via DataHub_WriteVisionData().
- */
-void TaskMockVision_Entry(void *argument);
-
-/**
- * @brief Dynamically switch the active test scenario
- * @note  Thread-safe. Can be triggered via a Debug UART CLI command or
- * by mapping an RC transmitter switch (e.g., CH8 Aux Knob) to this function.
- * @param new_scenario The scenario to execute
- * @return ARA_OK on success
+ * @brief Change the current test scenario (Thread-safe, can be called via CLI).
  */
 AraStatus_t TaskMockVision_SetScenario(MockScenario_t new_scenario);
+
+/**
+ * @brief The 50Hz Execution Step.
+ * @note  Generates fake vision coordinates based on the active scenario script.
+ * * @param current_tick_ms [IN]  Current system time
+ * @param p_out_vision    [OUT] The generated fake vision frame (passed to Manipulator)
+ */
+void TaskMockVision_Update(uint32_t current_tick_ms, AraVisionData_t *p_out_vision);
 
 #endif /* TASK_MOCK_VISION_H */

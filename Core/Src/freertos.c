@@ -27,7 +27,6 @@
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
 #include "bsp_uart.h"
-#include "app_scheduler.h" // [添加]
 #include "task_motion.h"   // [添加]
 #include "test_rc_console.h"
 #include <math.h> // 用于测试浮点打印
@@ -166,8 +165,8 @@ void LogTask(void *argument)
   /* USER CODE BEGIN LogTask */
 //    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
 //    TestConsole_Init();
-    BSP_UART_Printf("[LogTask] Started\r\n");
-    TestRcConsole_Init();
+//    BSP_UART_Printf("[LogTask] Started\r\n");
+//    TestRcConsole_Init();
 
 
     /* Infinite loop */
@@ -175,7 +174,7 @@ void LogTask(void *argument)
     {
         // 示例：打印当前系统状态
 //        TestConsole_TaskLoop();
-        TestRcConsole_TaskLoop();
+//        TestRcConsole_TaskLoop();
 
 
         osDelay(20);
