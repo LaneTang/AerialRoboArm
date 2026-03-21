@@ -12,9 +12,9 @@
 
 /* --- Configuration Constants --- */
 #define MOTION_LOOP_PERIOD_MS   (1)     // 1kHz Loop
-#define MOTOR_POLE_PAIRS        (7)     // Standard for 2804 Gimbal Motors
-#define ALIGN_VOLTAGE_Q15       (3276)  // ~10% of Max Voltage for Alignment
-#define ALIGN_DURATION_TICKS    (2000)  // 2 Seconds for alignment
+#define MOTOR_POLE_PAIRS        (7)     // 2804/2808 listed motors are both 7 pole-pairs
+#define ALIGN_VOLTAGE_Q15       (4915)  // ~15% of full-scale voltage, safer starting point for 2808
+#define ALIGN_DURATION_TICKS    (2500)  // 2.5 seconds, gives the heavier rotor more settle time
 #define SENSOR_TIMEOUT_TICKS    (2)     // 2ms timeout for I2C
 
 /* --- Global Context --- */
@@ -83,7 +83,7 @@ void TaskMotion_Init(void)
     // PID Controllers (Default safe gains, needs tuning)
     // Kp=1.0(256), Ki=0.01, Kd=0
     AlgPid_Init(&ctx.vel_pid);
-    AlgPid_SetGains(&ctx.vel_pid, 200, 10, 0, BSP_PWM_MAX_DUTY, BSP_PWM_MAX_DUTY);
+    AlgPid_SetGains(&ctx.vel_pid, 300, 8, 0, BSP_PWM_MAX_DUTY, BSP_PWM_MAX_DUTY);
 
     // 3. Initialize State
     ctx.state = MOTION_STATE_IDLE;
