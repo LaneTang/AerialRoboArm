@@ -618,4 +618,6 @@ void TaskMotion_Update(const DataHub_Cmd_t *p_cmd, DataHub_State_t *p_state)
     p_state->current_foc_angle = current_angle;
     p_state->current_velocity  = current_vel;
     p_state->foc_status        = s_motion_ctx.hw_status;
+    p_state->motion_ready      = ((s_motion_ctx.state == MOTION_STATE_READY) ||
+                                  (s_motion_ctx.state == MOTION_STATE_CLOSED_LOOP));
 }

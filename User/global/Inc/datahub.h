@@ -77,10 +77,14 @@ typedef struct {
 /**
  * @brief Uplink State Struct (1000Hz Motion -> 50Hz Logic)
  */
+/**
+ * @brief Uplink State Struct (1000Hz Motion -> 50Hz Logic)
+ */
 typedef struct {
-    uint16_t        current_foc_angle;  // Real-time AS5600 angle (0-4095)
-    int16_t         current_velocity;   // Real-time calculated velocity (counts/ms)
-    AraStatus_t     foc_status;         // Hardware health (e.g., ARA_ERR_NACK)
+    uint16_t        current_foc_angle;  /**< Real-time AS5600 angle (0-4095). */
+    int16_t         current_velocity;   /**< Real-time calculated velocity (counts/ms). */
+    AraStatus_t     foc_status;         /**< Hardware / motion health state. */
+    bool            motion_ready;       /**< true when Motion finished calibration and is ready for control. */
 } DataHub_State_t;
 
 

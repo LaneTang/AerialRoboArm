@@ -14,7 +14,7 @@
 #include "task_motion.h"
 #include "task_manipulator.h"
 #include "task_rc.h"
-#include "task_mock_vision.h"
+//#include "task_mock_vision.h"
 
 /* FreeRTOS Dependencies */
 #include "FreeRTOS.h"
@@ -182,7 +182,7 @@ static void Thread_LowFreq_Logic(void *argument)
     const TickType_t xFrequency = pdMS_TO_TICKS(THREAD_LOW_FREQ_PERIOD_MS);
 
     RcControlData_t rc_intent;
-    AraVisionData_t vision_data;
+//    AraVisionData_t vision_data;
     DataHub_State_t motion_state;
     DataHub_Cmd_t   out_cmd;
 
@@ -203,12 +203,12 @@ static void Thread_LowFreq_Logic(void *argument)
         rc_intent.sys_reset_pulse = false;
         rc_intent.aux_knob_val    = 0U;
 
-        vision_data.seq_id         = 0U;
-        vision_data.is_tracking    = false;
-        vision_data.is_grabbable   = false;
-        vision_data.pc_estop_req   = false;
-        vision_data.target_roll    = 0;
-        vision_data.target_dist_mm = 0U;
+//        vision_data.seq_id         = 0U;
+//        vision_data.is_tracking    = false;
+//        vision_data.is_grabbable   = false;
+//        vision_data.pc_estop_req   = false;
+//        vision_data.target_roll    = 0;
+//        vision_data.target_dist_mm = 0U;
 
         out_cmd.sys_mode         = ARA_MODE_INIT;
         out_cmd.emergency_stop   = true;
@@ -229,7 +229,7 @@ static void Thread_LowFreq_Logic(void *argument)
 
         /* 1B. Fetch latest vision data */
 #if ENABLE_MOCK_VISION
-        TaskMockVision_Update(current_tick_ms, &vision_data);
+//        TaskMockVision_Update(current_tick_ms, &vision_data);
 #else
         /* Placeholder for the real UART VSP runnable */
         /* TaskVision_Update(current_tick_ms, &vision_data); */
@@ -246,7 +246,7 @@ static void Thread_LowFreq_Logic(void *argument)
          * ================================================================== */
 
         /* Generate command for the high-frequency motion thread */
-        TaskManipulator_Update(&rc_intent, &vision_data, &out_cmd);
+        TaskManipulator_Update(&rc_intent, &motion_state, &out_cmd);
 
         /* ====================================================================
          * STAGE 3: Action (Publish Command)
@@ -295,8 +295,8 @@ void App_Threads_Init(void)
     TaskManipulator_Init();
 
 #if ENABLE_MOCK_VISION
-    TaskMockVision_Init();
-    TaskMockVision_SetScenario(MOCK_SCENARIO_HAPPY_PATH);
+//    TaskMockVision_Init();
+//    TaskMockVision_SetScenario(MOCK_SCENARIO_HAPPY_PATH);
 #else
     /* TaskVision_Init(); */
 #endif

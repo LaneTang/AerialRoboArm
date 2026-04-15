@@ -1,9 +1,13 @@
 /**
  * @file task_manipulator.h
- * @brief Arm manipulator brain and state machine runnable (L4).
+ * @brief Demo-oriented manipulator brain and state machine runnable (L4).
  * @note  Executes the 50Hz decision logic for the folding-arm BLDC axis and
- *        end-effector servos. This layer contains no RTOS dependencies and is
- *        called exclusively by the L5 low-frequency logic thread.
+ *        end-effector servos. This revision is aligned to the current demo goal:
+ *        - MANUAL mode directly controls all actuators from RC semantics.
+ *        - AUTO mode is a deterministic fixed demo flow.
+ *        - Vision input is removed from this task.
+ *        - The BLDC target remains expressed as AS5600 raw angle for compatibility
+ *          with the current Motion / DataHub contract.
  */
 
 #ifndef TASK_MANIPULATOR_H
@@ -11,34 +15,34 @@
 
 #include "ara_def.h"
 #include "datahub.h"
-#include "mod_vsp_parser.h"
 
 /**
- * @brief Manipulator top-level state machine.
+ * @brief Manipulator top-level demo state machine.
  */
 typedef enum {
-    MANIP_STATE_IDLE = 0,       /**< Safe idle / home-hold state. */
-    MANIP_STATE_MANUAL,         /**< Direct operator control from RC. */
-    MANIP_STATE_SEEKING,        /**< Auto tracking with low-pass filtering. */
-    MANIP_STATE_CONVERGING,     /**< Auto convergence debounce before grab. */
-    MANIP_STATE_GRABBING,       /**< Blind gripper closing while position is held. */
-    MANIP_STATE_RETRACTING,     /**< Pull back to home after grab. */
-    MANIP_STATE_ERROR_SAFE      /**< Emergency-safe state. */
+    MANIP_STATE_STARTUP_PARK = 0,  /**< Startup park-hold after motion calibration. */
+    MANIP_STATE_IDLE,              /**< Safe demo idle / park-hold state. */
+    MANIP_STATE_MANUAL,            /**< Direct operator control from RC. */
+    MANIP_STATE_AUTO_MOVE_PICK,    /**< AUTO: move joint to fixed pick angle. */
+    MANIP_STATE_AUTO_HOLD_VERIFY,  /**< AUTO: verify joint stays within tolerance. */
+    MANIP_STATE_AUTO_GRAB_CLOSE,   /**< AUTO: close gripper after hold verification. */
+    MANIP_STATE_AUTO_RETRACT,      /**< AUTO: retract joint to fixed demo angle. */
+    MANIP_STATE_AUTO_DONE,         /**< AUTO: final hold state. */
+    MANIP_STATE_ERROR_SAFE         /**< Emergency-safe latched state. */
 } ManipulatorState_t;
 
 /**
  * @brief Manipulator runnable context.
  */
 typedef struct {
-    ManipulatorState_t current_state;        /**< Current top-level manipulator state. */
-    uint32_t           state_enter_tick;     /**< 50Hz tick when the current state was entered. */
+    ManipulatorState_t current_state;        /**< Current top-level state. */
+    uint32_t           state_enter_tick;     /**< 50Hz tick when current state was entered. */
 
-    int16_t            filtered_roll;        /**< Filtered vision roll target, unit: centi-degree. */
-    uint16_t           filtered_ext_mm;      /**< Filtered vision extension target, unit: mm. */
+    uint16_t           manual_target_degree;   /**< Manual-mode joint target in mechanical degree. */
+    uint8_t            manual_gripper_percent; /**< Manual-mode gripper target, 0~100%. */
+    uint8_t            manual_roll_degree;     /**< Manual-mode roll target, 0~180 degree. */
 
-    uint16_t           manual_target_angle_raw; /**< Manual-mode BLDC target in AS5600 raw angle. */
-    uint8_t            manual_gripper_percent;  /**< Manual-mode gripper target, 0~100%. */
-    uint8_t            manual_roll_degree;      /**< Manual-mode roll target, 0~180 degree. */
+    bool               auto_start_armed;       /**< AUTO may start only after seeing a non-AUTO state first. */
 } TaskManipulator_Context_t;
 
 /**
@@ -50,14 +54,13 @@ void TaskManipulator_Init(void);
 /**
  * @brief  Execute one 50Hz manipulator decision step.
  * @param  p_rc_intent   Pointer to the latest RC semantic intent.
- * @param  p_vision_data Pointer to the latest validated vision semantic data.
+ * @param  p_motion_state Pointer to the latest motion feedback from DataHub.
  * @param  p_out_cmd     Pointer to the downlink command written toward Motion.
  * @note   The function is strictly non-blocking.
- * @note   The BLDC axis target is still expressed as a raw AS5600 target angle
- *         for compatibility with the current Motion / DataHub contract.
+ * @note   This revision no longer depends on any vision data.
  */
 void TaskManipulator_Update(const RcControlData_t *p_rc_intent,
-                            const AraVisionData_t *p_vision_data,
+                            const DataHub_State_t *p_motion_state,
                             DataHub_Cmd_t *p_out_cmd);
 
 #endif /* TASK_MANIPULATOR_H */

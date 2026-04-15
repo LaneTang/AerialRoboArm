@@ -1,37 +1,61 @@
 /**
  * @file task_rc.h
- * @brief RC Data Collection & Semantic Logic (L4) - Downgraded to Runnable
- * @note  Extracts high-level intent from raw L2 ELRS data.
+ * @brief RC Data Collection & Semantic Logic Runnable (L4)
+ * @note  Extracts high-level intent from raw L2 ELRS data. This task owns
+ *        L2 ELRS driver orchestration and L3 semantic mapping.
  */
 
 #ifndef TASK_RC_H
 #define TASK_RC_H
 
 #include "ara_def.h"
-#include "datahub.h"          /* For RcControlData_t */
+#include "datahub.h"
 #include "drv_elrs.h"
 #include "mod_rc_semantic.h"
 
-/* --- Logic Context --- */
-typedef struct {
-    bool                    is_initialized;
-    DrvElrs_Context_t       elrs_driver;
-    ModRcSemantic_Context_t semantic_logic;
-} TaskRc_Context_t;
-
-/* --- API --- */
+/* =========================================================
+ * 1. Task Context
+ * ========================================================= */
 
 /**
- * @brief Initialize RC dependencies (UART, Protocol Parsers).
+ * @brief RC task runtime context.
+ */
+typedef struct {
+    bool                    is_initialized; /**< Combined init state of owned dependencies. */
+    DrvElrs_Context_t       elrs_driver;    /**< Owned L2 ELRS driver. */
+    ModRcSemantic_Context_t semantic_logic; /**< Owned L3 semantic module. */
+} TaskRc_Context_t;
+
+/* =========================================================
+ * 2. API
+ * ========================================================= */
+
+/**
+ * @brief  Initialize RC task dependencies.
+ * @note   This binds the ELRS driver to the dedicated UART device and seeds
+ *         the semantic module with safe default channels.
  */
 void TaskRc_Init(void);
 
 /**
- * @brief The 50Hz Execution Step.
- * @note  Reads the UART RingBuffer, checks CRC, applies failsafes if link lost.
- * * @param current_tick_ms [IN]  Current system time for timeout evaluation
- * @param p_out_intent    [OUT] The extracted semantic intent (passed to Manipulator)
+ * @brief  Execute one formal RC semantic update step.
+ * @param  current_tick_ms Current system tick in milliseconds.
+ * @param  p_out_intent Output semantic intent for manipulator / upper logic.
+ * @note   This API is intended for formal MANUAL / AUTO system flows.
+ *         When link is down or initialization failed, safe failsafe intent
+ *         is emitted.
  */
 void TaskRc_Update(uint32_t current_tick_ms, RcControlData_t *p_out_intent);
+
+/**
+ * @brief  Execute one debug RC analog update step.
+ * @param  current_tick_ms Current system tick in milliseconds.
+ * @param  p_out_debug Output debug-oriented analog RC data.
+ * @note   This API is intended for TB0 module debugging scenarios where CH1
+ *         should be observed as direct analog percentage rather than collapsed
+ *         into EXTEND / RETRACT / HOLD semantics.
+ */
+void TaskRc_UpdateDebugAnalog(uint32_t current_tick_ms,
+                              RcDebugAnalogData_t *p_out_debug);
 
 #endif /* TASK_RC_H */
