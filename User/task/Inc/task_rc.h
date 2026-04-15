@@ -58,4 +58,20 @@ void TaskRc_Update(uint32_t current_tick_ms, RcControlData_t *p_out_intent);
 void TaskRc_UpdateDebugAnalog(uint32_t current_tick_ms,
                               RcDebugAnalogData_t *p_out_debug);
 
+/**
+ * @brief  Query whether TaskRc has completed dependency initialization.
+ * @return true if initialized successfully, otherwise false.
+ */
+bool TaskRc_IsInitialized(void);
+
+/**
+ * @brief  Copy the latest valid raw ELRS channel snapshot.
+ * @param  p_out_channels Output buffer for all raw channels.
+ * @param  out_count Number of elements available in @p p_out_channels.
+ * @return ARA_OK on success,
+ *         ARA_ERR_PARAM on invalid input,
+ *         ARA_ERR_DISCONNECTED when link is currently down or TaskRc is not initialized.
+ */
+AraStatus_t TaskRc_CopyRawChannels(uint16_t *p_out_channels, uint8_t out_count);
+
 #endif /* TASK_RC_H */

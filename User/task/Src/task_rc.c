@@ -216,3 +216,21 @@ void TaskRc_UpdateDebugAnalog(uint32_t current_tick_ms,
 
     p_out_debug->is_link_up = true;
 }
+
+bool TaskRc_IsInitialized(void)
+{
+    return s_rc_ctx.is_initialized;
+}
+
+AraStatus_t TaskRc_CopyRawChannels(uint16_t *p_out_channels, uint8_t out_count)
+{
+    if ((p_out_channels == NULL) || (out_count < DRV_ELRS_MAX_CHANNELS)) {
+        return ARA_ERR_PARAM;
+    }
+
+    if (!s_rc_ctx.is_initialized) {
+        return ARA_ERR_DISCONNECTED;
+    }
+
+    return DrvElrs_CopyChannels(&s_rc_ctx.elrs_driver, p_out_channels, out_count);
+}

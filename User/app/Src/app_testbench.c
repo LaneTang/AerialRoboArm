@@ -1,203 +1,173 @@
 /**
  * @file app_testbench.c
- * @brief Dual-thread on-board demo testbench implementation for ARA project.
- * @note  Strictly C99. Reuses formal L4 runnables and formal DataHub bridge.
- *        This module is intended for demo bring-up under the same dual-thread
- *        architecture as the production application.
+ * @brief Module-test-only dual-thread testbench for ARA project.
+ * @note  Strictly C99. This revision only tests modules:
+ *        - ELRS init / link / raw channels / semantic decode
+ *        - Motor init / FOC align
+ *        - Motor open-loop test
+ *        - Motor closed-loop test
+ *
+ *        No demo business flow is implemented here.
  */
 
 #include "app_testbench.h"
-#include "datahub.h"
-#include "task_motion.h"
 #include "task_rc.h"
-#include "task_manipulator.h"
 #include "bsp_uart.h"
 #include "dev_status.h"
-#include "mod_actuator.h"
+
+#include "drv_as5600.h"
+#include "drv_bldc_power.h"
+#include "alg_voltage_foc.h"
+#include "alg_pid.h"
+#include "bsp_pwm.h"
+
 #include "FreeRTOS.h"
 #include "task.h"
 
 #include <string.h>
 
 /* ============================================================================
- * 1. Testbench Modes / Configuration
+ * 1. Testbench Top-Level Modes
  * ========================================================================== */
 
-/**
- * @brief Top-level testbench mode.
- */
 typedef enum {
-    TESTBENCH_MODE_MENU = 0,     /**< Main menu / quiet state. */
-    TESTBENCH_MODE_MOD_DEBUG,    /**< Module debug: CH1 direct analog BLDC control. */
-    TESTBENCH_MODE_BLDC_3POS,    /**< BLDC three-target closed-loop demo. */
-    TESTBENCH_MODE_RC_MANUAL,    /**< ELRS MANUAL demo. */
-    TESTBENCH_MODE_AUTO_FIXED    /**< AUTO fixed-flow demo. */
-} TestbenchMode_t;
+    TESTBENCH_SLOT_MENU = 0,
+    TESTBENCH_SLOT_RC,
+    TESTBENCH_SLOT_MOTOR_ALIGN,
+    TESTBENCH_SLOT_MOTOR_OPEN,
+    TESTBENCH_SLOT_MOTOR_CLOSED,
+    TESTBENCH_SLOT_RC_MANUAL
+} TestbenchSlot_t;
 
-/**
- * @brief Number of low-frequency ticks used to issue a short Motion INIT pulse.
- * @note  2 ticks * 20ms = 40ms. INIT is used only as a reset pulse, not as a
- *        long blocking initialization window.
- */
-#define TESTBENCH_MODE_ENTRY_INIT_PULSE_TICKS (2U)
+typedef enum {
+    TESTBENCH_LOGFMT_SEMANTIC = 0,
+    TESTBENCH_LOGFMT_RAW
+} TestbenchLogFormat_t;
 
-/**
- * @brief Periodic log interval in low-frequency ticks.
- * @note  5 ticks * 20ms = 100ms.
- */
-#define TESTBENCH_LOG_INTERVAL_TICKS          (5U)
-
-/**
- * @brief BLDC three-target demo hold duration at each target.
- * @note  50 ticks * 20ms = 1s.
- */
-#define TESTBENCH_BLDC_HOLD_TICKS             (50U)
-
-/**
- * @brief BLDC three-target reach tolerance in degree.
- */
-#define TESTBENCH_BLDC_REACH_TOL_DEG          (3U)
-
-/**
- * @brief Module debug CH1 deadband in percent.
- */
-#define TESTBENCH_MODDBG_CH1_DEADBAND_PCT     (8)
-
-/**
- * @brief Module debug CH1 max degree step per 20ms tick.
- * @note  ch1_percent / 25 => [-4, +4] deg per tick.
- */
-#define TESTBENCH_MODDBG_CH1_DIVISOR          (25)
-
-/**
- * @brief Demo joint mechanical zero angle in AS5600 raw domain.
- * @note  Keep this aligned with task_manipulator.c.
- */
-#define TESTBENCH_DEMO_JOINT_ZERO_RAW         (850U)
-
-/**
- * @brief Positive mechanical direction in raw domain.
- * @note  Keep this aligned with task_manipulator.c.
- */
-#define TESTBENCH_DEMO_POSITIVE_DIR           (1)
-
-/**
- * @brief Demo park angle in degree.
- */
-#define TESTBENCH_DEMO_PARK_DEG               (15U)
-
-/**
- * @brief Demo pick angle in degree.
- */
-#define TESTBENCH_DEMO_PICK_DEG               (120U)
-
-/**
- * @brief Demo retract angle in degree.
- */
-#define TESTBENCH_DEMO_RETRACT_DEG            (30U)
-
-/**
- * @brief Manual/debug minimum joint angle in degree.
- */
-#define TESTBENCH_DEMO_MIN_DEG                (0U)
-
-/**
- * @brief Manual/debug maximum joint angle in degree.
- */
-#define TESTBENCH_DEMO_MAX_DEG                (130U)
+static RcControlData_t s_tb_rc_semantic;
+static uint16_t        s_tb_rc_raw_channels[DRV_ELRS_MAX_CHANNELS]; // 旁路原始数据缓存
+static int16_t         s_tb_rc_ch1_percent;                         // 算出的 CH1 百分比
 
 /* ============================================================================
- * 2. Static Thread Handles / Shared State
+ * 2. Motor Bench Internal Types
  * ========================================================================== */
 
-/**
- * @brief Handle of the high-frequency physical thread.
- */
-static TaskHandle_t s_tb_high_freq_task_handle = NULL;
+typedef enum {
+    TB_MOTOR_CMD_IDLE = 0,
+    TB_MOTOR_CMD_ALIGN,
+    TB_MOTOR_CMD_OPEN_LOOP,
+    TB_MOTOR_CMD_CLOSED_LOOP,
+    TB_MOTOR_CMD_ESTOP
+} TbMotorCmdType_t;
 
-/**
- * @brief Handle of the low-frequency physical thread.
- */
+typedef enum {
+    TB_MOTOR_STATE_UNINIT = 0,
+    TB_MOTOR_STATE_IDLE,
+    TB_MOTOR_STATE_ALIGNING,
+    TB_MOTOR_STATE_OPEN_LOOP,
+    TB_MOTOR_STATE_CLOSED_LOOP,
+    TB_MOTOR_STATE_ERROR
+} TbMotorState_t;
+
+typedef struct {
+    TbMotorCmdType_t cmd;
+    int16_t          open_loop_speed_raw_per_tick;
+    int32_t          closed_loop_target_ext_raw;
+} TbMotorCmd_t;
+
+typedef struct {
+    bool            initialized;
+    bool            aligned;
+    TbMotorState_t  state;
+    uint16_t        raw_angle;
+    int32_t         ext_raw;
+    int16_t         velocity_raw_per_ms;
+    int32_t         open_loop_speed_raw_per_tick;
+    int32_t         closed_loop_target_ext_raw;
+    int32_t         error_ext;       // 当前误差
+    int16_t         pid_out_uq;      // PID 输出值
+    int32_t         pid_integral;    // 积分累加值
+    int16_t         kp, ki, kd;      // 当前增益参数
+    AraStatus_t     status;
+} TbMotorStateReport_t;
+
+typedef struct {
+    bool               initialized;
+    bool               aligned;
+    TbMotorState_t     state;
+    uint32_t           uptime_ticks;
+    uint32_t           state_ticks;
+    uint16_t           foc_zero_offset;
+    uint16_t           prev_raw_angle;
+    int32_t            open_loop_phase_raw;
+    int32_t            last_error_ext;
+    int16_t            last_pid_out_uq;
+    AraStatus_t        status;
+
+    DrvAS5600_Context_t enc_driver;
+    DrvBldc_Context_t   motor_driver;
+    AlgFoc_Context_t    foc_algo;
+    AlgPid_Context_t    pos_pid;
+
+    /* --- 新增：用于彻底解决越界翻转的绝对连续坐标累加器 --- */
+    int32_t            continuous_ext_raw;
+} TbMotorBenchContext_t;
+
+/* ============================================================================
+ * 3. Constants
+ * ========================================================================== */
+
+#define TESTBENCH_LOG_INTERVAL_TICKS        (10U)   /* 10 * 20ms = 200ms = 5Hz */
+
+#define TB_MOTOR_HOME_RAW_CALIB             (2200U)
+#define TB_MOTOR_WRAP_THRESHOLD_RAW         (800U)
+#define TB_MOTOR_EXT_MIN_RAW                (0)
+#define TB_MOTOR_EXT_MAX_RAW                ((int32_t)((4096U + TB_MOTOR_WRAP_THRESHOLD_RAW) - TB_MOTOR_HOME_RAW_CALIB))
+
+#define TB_MOTOR_POLE_PAIRS                 (7U)
+#define TB_MOTOR_SENSOR_PRIME_TICKS         (20U)
+#define TB_MOTOR_ALIGN_VOLTAGE_D_Q15        (16384)
+#define TB_MOTOR_ALIGN_DURATION_TICKS       (2000U)
+
+#define TB_MOTOR_OPEN_LOOP_UQ_Q15           (8192)
+#define TB_MOTOR_OPEN_LOOP_SPEED_STEP       (1)
+#define TB_MOTOR_OPEN_LOOP_SPEED_MAX        (20)
+
+#define TB_MOTOR_HARDCODED_ZERO_OFFSET      (258U)
+
+#define TB_MOTOR_PID_ERR_FULL_SCALE_EXT     (1024)
+#define TB_MOTOR_CLOSED_LOOP_UQ_LIMIT_Q15   (12000)
+#define TB_MOTOR_PID_POS_KP_Q8_8            (384)
+#define TB_MOTOR_PID_POS_KI_Q8_8            (3)
+#define TB_MOTOR_PID_POS_KD_Q8_8            (0)
+#define TB_MOTOR_PID_INT_MAX                (2560000)
+#define TB_MOTOR_CLOSED_LOOP_TARGET_STEP    (32)
+#define TB_MOTOR_TARGET_REACHED_THD_EXT     (12)
+
+/* ============================================================================
+ * 4. Static Shared Objects
+ * ========================================================================== */
+
+static TaskHandle_t s_tb_high_freq_task_handle = NULL;
 static TaskHandle_t s_tb_low_freq_task_handle = NULL;
 
-/**
- * @brief Current testbench mode.
- */
-static TestbenchMode_t s_tb_mode = TESTBENCH_MODE_MENU;
-
-/**
- * @brief Monotonic low-frequency tick counter.
- */
+static TestbenchSlot_t s_tb_slot = TESTBENCH_SLOT_MENU;
+static TestbenchLogFormat_t s_tb_log_format = TESTBENCH_LOGFMT_SEMANTIC;
 static uint32_t s_tb_low_freq_tick = 0U;
-
-/**
- * @brief Remaining forced-reset ticks after mode entry.
- */
-static uint8_t s_tb_mode_reset_ticks = 0U;
-
-/**
- * @brief One-shot snapshot request flag.
- */
 static bool s_tb_print_snapshot_req = false;
 
-/**
- * @brief Whether the current mode is waiting for Motion to become ready.
- */
-static bool s_tb_wait_motion_ready = false;
-
-/**
- * @brief Module-debug direct joint target in degree.
- */
-static uint16_t s_tb_moddbg_target_deg = TESTBENCH_DEMO_PARK_DEG;
-
-/**
- * @brief BLDC three-target demo current target index.
- */
-static uint8_t s_tb_bldc_target_idx = 0U;
-
-/**
- * @brief BLDC three-target demo hold counter.
- */
-static uint32_t s_tb_bldc_hold_ticks = 0U;
-
-/**
- * @brief Shared actuator instance owned by testbench for non-manipulator modes.
- */
-static ModActuator_Context_t s_tb_actuator_ctx;
-
-/**
- * @brief Whether the shared actuator instance has been initialized.
- */
-static bool s_tb_actuator_initialized = false;
-
-/**
- * @brief Fixed target list of BLDC three-target demo.
- */
-static const uint16_t s_tb_bldc_targets_deg[3] = {
-        TESTBENCH_DEMO_PARK_DEG,
-        TESTBENCH_DEMO_PICK_DEG,
-        TESTBENCH_DEMO_RETRACT_DEG
-};
+static TbMotorCmd_t s_tb_motor_cmd;
+static TbMotorStateReport_t s_tb_motor_state;
 
 /* ============================================================================
- * 3. Private Helper Functions
+ * 5. Generic Helpers
  * ========================================================================== */
 
-/**
- * @brief  Compute absolute value of a signed 32-bit integer.
- * @param  value Input value.
- * @return Absolute value.
- */
 static int32_t Testbench_Abs32(int32_t value)
 {
     return (value >= 0) ? value : (-value);
 }
 
-/**
- * @brief  Wrap an arbitrary signed angle into AS5600 raw domain [0, 4095].
- * @param  angle Input angle in extended integer domain.
- * @return Wrapped raw-angle value.
- */
 static uint16_t Testbench_WrapRawAngle(int32_t angle)
 {
     while (angle < 0) {
@@ -211,353 +181,476 @@ static uint16_t Testbench_WrapRawAngle(int32_t angle)
     return (uint16_t)angle;
 }
 
-/**
- * @brief  Convert mechanical degree into raw encoder counts.
- * @param  degree Mechanical angle in degree.
- * @return Equivalent raw-angle offset.
- */
-static uint16_t Testbench_DegToRaw(uint16_t degree)
+static int32_t Testbench_ClampExtRaw(int32_t ext_raw)
 {
-    return (uint16_t)(((uint32_t)degree * 4096U) / 360U);
+    return ext_raw;
 }
 
 /**
- * @brief  Convert a demo mechanical angle into absolute raw-angle target.
- * @param  degree Mechanical angle in degree.
- * @return Absolute AS5600 raw target.
+ * @brief 将绝对单调坐标 (ext_raw) 映射为 [0, 359] 的物理角度
+ * @note  定义 ext_raw = 0 时为 0 度。严格使用定点整数乘除法。
  */
-static uint16_t Testbench_DemoAngleToRaw(uint16_t degree)
+static uint16_t Testbench_MapExtToDegree(int32_t ext_raw)
 {
-    int32_t target;
+    // 1. 将绝对坐标对一圈的原始量程(4096)取模
+    int32_t offset_raw = ext_raw % 4096;
 
-    target = (int32_t)TESTBENCH_DEMO_JOINT_ZERO_RAW +
-             ((int32_t)TESTBENCH_DEMO_POSITIVE_DIR * (int32_t)Testbench_DegToRaw(degree));
+    // 2. 如果是负数（反转了），将其拉回正整数范围
+    if (offset_raw < 0) {
+        offset_raw += 4096;
+    }
 
-    return Testbench_WrapRawAngle(target);
+    // 3. 映射到 360 度 (定点数计算：先乘后除防精度丢失)
+    return (uint16_t)((offset_raw * 360) / 4096);
 }
 
-/**
- * @brief  Compute shortest signed raw-angle error.
- * @param  target Target raw angle.
- * @param  actual Actual raw angle.
- * @return Signed shortest-path error in raw counts.
- */
-static int32_t Testbench_CalcShortestPathError(uint16_t target, uint16_t actual)
+static int16_t Testbench_ClampOpenLoopSpeed(int16_t speed)
 {
-    int32_t error = (int32_t)target - (int32_t)actual;
-
-    if (error > 2048) {
-        error -= 4096;
-    } else if (error < -2048) {
-        error += 4096;
+    if (speed > TB_MOTOR_OPEN_LOOP_SPEED_MAX) {
+        return TB_MOTOR_OPEN_LOOP_SPEED_MAX;
     }
 
-    return error;
+    if (speed < (-TB_MOTOR_OPEN_LOOP_SPEED_MAX)) {
+        return (int16_t)(-TB_MOTOR_OPEN_LOOP_SPEED_MAX);
+    }
+
+    return speed;
 }
 
-/**
- * @brief  Clamp an unsigned 16-bit value into inclusive range.
- * @param  value Input value.
- * @param  min_value Minimum allowed value.
- * @param  max_value Maximum allowed value.
- * @return Clamped value.
- */
-static uint16_t Testbench_ClampU16(uint16_t value, uint16_t min_value, uint16_t max_value)
+static int16_t Testbench_CalcVelocity(uint16_t curr, uint16_t prev)
 {
-    if (value < min_value) {
-        return min_value;
+    int32_t diff = (int32_t)curr - (int32_t)prev;
+
+    if (diff > 2048) {
+        diff -= 4096;
+    } else if (diff < -2048) {
+        diff += 4096;
     }
 
-    if (value > max_value) {
-        return max_value;
-    }
-
-    return value;
+    return (int16_t)diff;
 }
 
-/**
- * @brief  Map RC aux knob permille to roll degree.
- * @param  aux_permille Aux knob value in [0, 1000].
- * @return Servo degree in [0, 180].
- */
-static uint8_t Testbench_MapAuxToRollDegree(uint16_t aux_permille)
+static int32_t Testbench_MapRawToExt(uint16_t raw_angle)
 {
-    if (aux_permille > 1000U) {
-        aux_permille = 1000U;
-    }
+    int32_t raw_unwrapped;
 
-    return (uint8_t)(((uint32_t)aux_permille * 180U) / 1000U);
-}
-
-/**
- * @brief  Check whether current joint angle is within demo tolerance.
- * @param  p_motion_state Pointer to motion feedback.
- * @param  target_deg Target mechanical degree.
- * @param  tol_deg Allowed error in degree.
- * @return true if considered reached, otherwise false.
- */
-static bool Testbench_IsJointReachedDeg(const DataHub_State_t *p_motion_state,
-                                        uint16_t target_deg,
-                                        uint16_t tol_deg)
-{
-    uint16_t target_raw;
-    uint16_t tol_raw;
-    int32_t error;
-
-    if (p_motion_state == NULL) {
-        return false;
-    }
-
-    if (p_motion_state->foc_status != ARA_OK) {
-        return false;
-    }
-
-    target_raw = Testbench_DemoAngleToRaw(target_deg);
-    tol_raw = Testbench_DegToRaw(tol_deg);
-    error = Testbench_CalcShortestPathError(target_raw, p_motion_state->current_foc_angle);
-
-    return (Testbench_Abs32(error) <= (int32_t)tol_raw);
-}
-
-/**
- * @brief  Convert testbench mode to readable string.
- * @param  mode Testbench mode.
- * @return Constant string name.
- */
-static const char *Testbench_GetModeName(TestbenchMode_t mode)
-{
-    switch (mode) {
-        case TESTBENCH_MODE_MENU:
-            return "MENU";
-        case TESTBENCH_MODE_MOD_DEBUG:
-            return "TB0_MODULE_DEBUG";
-        case TESTBENCH_MODE_BLDC_3POS:
-            return "TB1_BLDC_3TARGET";
-        case TESTBENCH_MODE_RC_MANUAL:
-            return "TB2_ELRS_MANUAL";
-        case TESTBENCH_MODE_AUTO_FIXED:
-            return "TB3_AUTO_FIXED";
-        default:
-            return "UNKNOWN";
-    }
-}
-
-/**
- * @brief  Print the top-level main menu.
- */
-static void Testbench_PrintMainMenu(void)
-{
-    BSP_UART_Printf("\r\n=== ARA DEMO TESTBENCH ===\r\n");
-    BSP_UART_Printf("0. Module Debug\r\n");
-    BSP_UART_Printf("1. BLDC Three-Target Closed-Loop Demo\r\n");
-    BSP_UART_Printf("2. ELRS MANUAL Demo\r\n");
-    BSP_UART_Printf("3. AUTO Fixed-Flow Demo\r\n");
-    BSP_UART_Printf("--------------------------\r\n");
-    BSP_UART_Printf("Select: ");
-}
-
-/**
- * @brief  Print mode-entry banner.
- * @param  mode Entered mode.
- */
-static void Testbench_PrintModeBanner(TestbenchMode_t mode)
-{
-    BSP_UART_Printf("\r\n[TB] Enter %s\r\n", Testbench_GetModeName(mode));
-    BSP_UART_Printf("[TB] q = return to main menu\r\n");
-    BSP_UART_Printf("[TB] p = print one-shot snapshot\r\n");
-
-    switch (mode) {
-        case TESTBENCH_MODE_MOD_DEBUG:
-            BSP_UART_Printf("[TB0] CH1 direct analog controls BLDC target.\r\n");
-            BSP_UART_Printf("[TB0] SF controls roll servo. Gripper remains safe-open.\r\n");
-            break;
-
-        case TESTBENCH_MODE_BLDC_3POS:
-            BSP_UART_Printf("[TB1] Sequence: +15 -> +120 -> +30 deg\r\n");
-            break;
-
-        case TESTBENCH_MODE_RC_MANUAL:
-            BSP_UART_Printf("[TB2] Use ELRS MANUAL controls.\r\n");
-            BSP_UART_Printf("[TB2] SA/SD/SC/SF/CH1 follow formal RC semantic chain.\r\n");
-            break;
-
-        case TESTBENCH_MODE_AUTO_FIXED:
-            BSP_UART_Printf("[TB3] Wait in park, then toggle SA to AUTO to start fixed flow.\r\n");
-            break;
-
-        case TESTBENCH_MODE_MENU:
-        default:
-            break;
-    }
-}
-
-static void Testbench_EnterMode(TestbenchMode_t new_mode)
-{
-    s_tb_mode = new_mode;
-    s_tb_mode_reset_ticks = (new_mode == TESTBENCH_MODE_MENU) ? 0U : TESTBENCH_MODE_ENTRY_INIT_PULSE_TICKS;
-    s_tb_wait_motion_ready = (new_mode == TESTBENCH_MODE_MENU) ? false : true;
-    s_tb_print_snapshot_req = true;
-
-    if (new_mode == TESTBENCH_MODE_MOD_DEBUG) {
-        s_tb_moddbg_target_deg = TESTBENCH_DEMO_PARK_DEG;
-    } else if (new_mode == TESTBENCH_MODE_BLDC_3POS) {
-        s_tb_bldc_target_idx = 0U;
-        s_tb_bldc_hold_ticks = 0U;
-    } else if ((new_mode == TESTBENCH_MODE_RC_MANUAL) ||
-               (new_mode == TESTBENCH_MODE_AUTO_FIXED))
-    {
-        TaskManipulator_Init();
-    }
-
-    if (new_mode == TESTBENCH_MODE_MENU) {
-        Testbench_PrintMainMenu();
+    if (raw_angle < TB_MOTOR_WRAP_THRESHOLD_RAW) {
+        raw_unwrapped = (int32_t)raw_angle + 4096;
     } else {
-        Testbench_PrintModeBanner(new_mode);
+        raw_unwrapped = (int32_t)raw_angle;
     }
+
+    return raw_unwrapped - (int32_t)TB_MOTOR_HOME_RAW_CALIB;
 }
 
-/**
- * @brief  Ensure shared actuator instance is initialized for non-manipulator modes.
- */
-static void Testbench_EnsureActuatorInit(void)
+static uint16_t Testbench_MapExtToRaw(int32_t ext_raw)
 {
-    if (!s_tb_actuator_initialized) {
-        (void)ModActuator_Init(&s_tb_actuator_ctx);
-        s_tb_actuator_initialized = true;
-    }
+    int32_t raw_unwrapped;
+
+    ext_raw = Testbench_ClampExtRaw(ext_raw);
+    raw_unwrapped = (int32_t)TB_MOTOR_HOME_RAW_CALIB + ext_raw;
+
+    return Testbench_WrapRawAngle(raw_unwrapped);
 }
 
-/**
- * @brief  Apply safe non-manipulator end-effector pose.
- * @param  gripper_percent Gripper percentage in [0, 100].
- * @param  roll_degree Roll degree in [0, 180].
- */
-static void Testbench_CommandAuxActuators(uint8_t gripper_percent, uint8_t roll_degree)
+static int16_t Testbench_ExtErrorToQ15(int32_t error_ext_raw)
 {
-    Testbench_EnsureActuatorInit();
-    (void)ModActuator_SetGripper(&s_tb_actuator_ctx, gripper_percent);
-    (void)ModActuator_SetRoll(&s_tb_actuator_ctx, roll_degree);
+    int32_t scaled;
+
+    if (error_ext_raw >= TB_MOTOR_PID_ERR_FULL_SCALE_EXT) {
+        return (int16_t)32767;
+    }
+
+    if (error_ext_raw <= (-TB_MOTOR_PID_ERR_FULL_SCALE_EXT)) {
+        return (int16_t)(-32768);
+    }
+
+    scaled = (error_ext_raw * 32767) / TB_MOTOR_PID_ERR_FULL_SCALE_EXT;
+
+    if (scaled > 32767) {
+        scaled = 32767;
+    } else if (scaled < -32768) {
+        scaled = -32768;
+    }
+
+    return (int16_t)scaled;
 }
 
-/**
- * @brief  Guard mode entry by issuing a short INIT pulse and then waiting until
- *         Motion reports ready.
- * @param  p_motion_state Pointer to latest motion feedback.
- * @param  p_out_cmd Output command.
- * @return true if the entry guard is still active and the caller must not run
- *         the actual sub-task yet; false if the mode may proceed normally.
- */
-static bool Testbench_RunModeEntryGuard(const DataHub_State_t *p_motion_state,
-                                        DataHub_Cmd_t *p_out_cmd)
-{
-    if ((p_motion_state == NULL) || (p_out_cmd == NULL)) {
-        return true;
-    }
+/* ============================================================================
+ * 6. Shared Motor Command / State Accessors
+ * ========================================================================== */
 
-    if (s_tb_mode_reset_ticks > 0U) {
-        p_out_cmd->sys_mode = ARA_MODE_INIT;
-        p_out_cmd->emergency_stop = false;
-        p_out_cmd->target_foc_angle = Testbench_DemoAngleToRaw(TESTBENCH_DEMO_PARK_DEG);
-
-        s_tb_mode_reset_ticks--;
-        return true;
-    }
-
-    if (s_tb_wait_motion_ready) {
-        if (!p_motion_state->motion_ready) {
-            p_out_cmd->sys_mode = ARA_MODE_IDLE;
-            p_out_cmd->emergency_stop = false;
-            p_out_cmd->target_foc_angle = Testbench_DemoAngleToRaw(TESTBENCH_DEMO_PARK_DEG);
-            return true;
-        }
-
-        s_tb_wait_motion_ready = false;
-        BSP_UART_Printf("[TB] Motion ready, sub-task released.\r\n");
-    }
-
-    return false;
-}
-
-/**
- * @brief  Print compact state snapshot.
- * @param  p_cmd Latest downlink command.
- * @param  p_motion_state Latest motion feedback.
- * @param  p_rc Pointer to formal RC semantic data, or NULL.
- * @param  p_dbg Pointer to debug RC analog data, or NULL.
- */
-static void Testbench_PrintSnapshot(const DataHub_Cmd_t *p_cmd,
-                                    const DataHub_State_t *p_motion_state,
-                                    const RcControlData_t *p_rc,
-                                    const RcDebugAnalogData_t *p_dbg)
-{
-    if ((p_cmd == NULL) || (p_motion_state == NULL)) {
-        return;
-    }
-
-    BSP_UART_Printf("[TB] mode=%s cmd_mode=%d estop=%d tgt=%u cur=%u vel=%d foc=%d\r\n",
-                    Testbench_GetModeName(s_tb_mode),
-                    (int)p_cmd->sys_mode,
-                    (int)p_cmd->emergency_stop,
-                    (unsigned int)p_cmd->target_foc_angle,
-                    (unsigned int)p_motion_state->current_foc_angle,
-                    (int)p_motion_state->current_velocity,
-                    (int)p_motion_state->foc_status);
-
-    if (p_rc != NULL) {
-        BSP_UART_Printf("[TB] rc: link=%d req=%d estop=%d arm=%d grip=%d aux=%u rst=%d\r\n",
-                        (int)p_rc->is_link_up,
-                        (int)p_rc->req_mode,
-                        (int)p_rc->estop_state,
-                        (int)p_rc->arm_cmd,
-                        (int)p_rc->gripper_cmd,
-                        (unsigned int)p_rc->aux_knob_val,
-                        (int)p_rc->sys_reset_pulse);
-    }
-
-    if (p_dbg != NULL) {
-        BSP_UART_Printf("[TB] dbg: link=%d req=%d estop=%d ch1=%d aux=%u rst=%d tgt_deg=%u\r\n",
-                        (int)p_dbg->is_link_up,
-                        (int)p_dbg->req_mode,
-                        (int)p_dbg->estop_state,
-                        (int)p_dbg->ch1_percent,
-                        (unsigned int)p_dbg->aux_knob_val,
-                        (int)p_dbg->sys_reset_pulse,
-                        (unsigned int)s_tb_moddbg_target_deg);
-    }
-}
-
-/**
- * @brief  Update onboard status LED according to current testbench state.
- * @param  p_cmd Latest downlink command.
- */
-static void Testbench_UpdateStatusLed(const DataHub_Cmd_t *p_cmd)
+static void Testbench_WriteMotorCmd(const TbMotorCmd_t *p_cmd)
 {
     if (p_cmd == NULL) {
         return;
     }
 
-    if (p_cmd->emergency_stop || (p_cmd->sys_mode == ARA_MODE_ERROR)) {
-        if ((s_tb_low_freq_tick % 2U) == 0U) {
-            DEV_Status_LED_ToggleLed();
-        }
-    } else if (s_tb_mode == TESTBENCH_MODE_AUTO_FIXED) {
-        if ((s_tb_low_freq_tick % 10U) == 0U) {
-            DEV_Status_LED_ToggleLed();
-        }
-    } else if (s_tb_mode == TESTBENCH_MODE_MENU) {
-        if ((s_tb_low_freq_tick % 50U) == 0U) {
-            DEV_Status_LED_ToggleLed();
-        }
-    } else {
-        if ((s_tb_low_freq_tick % 20U) == 0U) {
-            DEV_Status_LED_ToggleLed();
-        }
+    taskENTER_CRITICAL();
+    s_tb_motor_cmd = *p_cmd;
+    taskEXIT_CRITICAL();
+}
+
+static void Testbench_ReadMotorCmd(TbMotorCmd_t *p_cmd)
+{
+    if (p_cmd == NULL) {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    *p_cmd = s_tb_motor_cmd;
+    taskEXIT_CRITICAL();
+}
+
+static void Testbench_WriteMotorState(const TbMotorStateReport_t *p_state)
+{
+    if (p_state == NULL) {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    s_tb_motor_state = *p_state;
+    taskEXIT_CRITICAL();
+}
+
+static void Testbench_ReadMotorState(TbMotorStateReport_t *p_state)
+{
+    if (p_state == NULL) {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    *p_state = s_tb_motor_state;
+    taskEXIT_CRITICAL();
+}
+
+/* ============================================================================
+ * 7. String Helpers
+ * ========================================================================== */
+
+static const char *Testbench_GetSlotName(TestbenchSlot_t slot)
+{
+    switch (slot) {
+        case TESTBENCH_SLOT_MENU:
+            return "MENU";
+        case TESTBENCH_SLOT_RC:
+            return "RC";
+        case TESTBENCH_SLOT_MOTOR_ALIGN:
+            return "MOTOR_ALIGN";
+        case TESTBENCH_SLOT_MOTOR_OPEN:
+            return "MOTOR_OPEN";
+        case TESTBENCH_SLOT_MOTOR_CLOSED:
+            return "MOTOR_CLOSED";
+        case TESTBENCH_SLOT_RC_MANUAL:
+            return "RC_MANUAL_DEMO";
+        default:
+            return "UNKNOWN";
     }
 }
 
-/**
- * @brief  Poll UART console and handle one-byte commands.
- */
+static const char *Testbench_GetLogFormatName(TestbenchLogFormat_t fmt)
+{
+    switch (fmt) {
+        case TESTBENCH_LOGFMT_SEMANTIC:
+            return "SEMANTIC";
+        case TESTBENCH_LOGFMT_RAW:
+            return "RAW";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static const char *Testbench_GetAraModeName(AraSysMode_t mode)
+{
+    switch (mode) {
+        case ARA_MODE_INIT:
+            return "INIT";
+        case ARA_MODE_IDLE:
+            return "IDLE";
+        case ARA_MODE_MANUAL:
+            return "MANUAL";
+        case ARA_MODE_AUTO:
+            return "AUTO";
+        case ARA_MODE_ERROR:
+            return "ERROR";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static const char *Testbench_GetArmCmdName(AraArmCmd_t cmd)
+{
+    switch (cmd) {
+        case ARM_CMD_HOLD:
+            return "HOLD";
+        case ARM_CMD_EXTEND:
+            return "EXTEND";
+        case ARM_CMD_RETRACT:
+            return "RETRACT";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static const char *Testbench_GetGripperCmdName(AraGripperCmd_t cmd)
+{
+    switch (cmd) {
+        case GRIPPER_CMD_STOP:
+            return "STOP";
+        case GRIPPER_CMD_OPEN:
+            return "OPEN";
+        case GRIPPER_CMD_CLOSE:
+            return "CLOSE";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static const char *Testbench_GetEstopName(AraEStopState_t state)
+{
+    switch (state) {
+        case ESTOP_RELEASED:
+            return "RELEASED";
+        case ESTOP_ACTIVE:
+            return "ACTIVE";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static const char *Testbench_GetStatusName(AraStatus_t status)
+{
+    switch (status) {
+        case ARA_OK:
+            return "ARA_OK";
+        case ARA_ERROR:
+            return "ARA_ERROR";
+        case ARA_BUSY:
+            return "ARA_BUSY";
+        case ARA_TIMEOUT:
+            return "ARA_TIMEOUT";
+        case ARA_ERR_PARAM:
+            return "ARA_ERR_PARAM";
+        case ARA_ERR_DMA:
+            return "ARA_ERR_DMA";
+        case ARA_ERR_IO:
+            return "ARA_ERR_IO";
+        case ARA_ERR_NACK:
+            return "ARA_ERR_NACK";
+        case ARA_ERR_CRC:
+            return "ARA_ERR_CRC";
+        case ARA_ERR_DISCONNECTED:
+            return "ARA_ERR_DISCONNECTED";
+        case ARA_ERR_MATH:
+            return "ARA_ERR_MATH";
+        default:
+            return "ARA_STATUS_UNKNOWN";
+    }
+}
+
+static const char *Testbench_GetMotorStateName(TbMotorState_t state)
+{
+    switch (state) {
+        case TB_MOTOR_STATE_UNINIT:
+            return "UNINIT";
+        case TB_MOTOR_STATE_IDLE:
+            return "IDLE";
+        case TB_MOTOR_STATE_ALIGNING:
+            return "ALIGNING";
+        case TB_MOTOR_STATE_OPEN_LOOP:
+            return "OPEN_LOOP";
+        case TB_MOTOR_STATE_CLOSED_LOOP:
+            return "CLOSED_LOOP";
+        case TB_MOTOR_STATE_ERROR:
+            return "ERROR";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+/* ============================================================================
+ * 8. Menu / Input Helpers
+ * ========================================================================== */
+
+static void Testbench_PrintMainMenu(void)
+{
+    BSP_UART_Printf("\r\n=== ARA MODULE TESTBENCH ===\r\n");
+    BSP_UART_Printf("0. RC module monitor\r\n");
+    BSP_UART_Printf("1. Motor init / align test\r\n");
+    BSP_UART_Printf("2. Motor open-loop test\r\n");
+    BSP_UART_Printf("3. Motor closed-loop test\r\n");
+    BSP_UART_Printf("4. RC Manual Demo (SC=Mode, CH1=Speed/Pos)\r\n"); // 新增提示
+    BSP_UART_Printf("------------------------------\r\n");
+    BSP_UART_Printf("h = print menu\r\n");
+    BSP_UART_Printf("p = print one-shot snapshot\r\n");
+    BSP_UART_Printf("v = toggle log format semantic/raw\r\n");
+    BSP_UART_Printf("q = return to menu / idle\r\n");
+    BSP_UART_Printf("------------------------------\r\n");
+    BSP_UART_Printf("slot commands:\r\n");
+    BSP_UART_Printf("a = motor align\r\n");
+    BSP_UART_Printf("g = motor run current slot mode\r\n");
+    BSP_UART_Printf("s = motor idle stop\r\n");
+    BSP_UART_Printf("e = motor estop\r\n");
+    BSP_UART_Printf("z = zero speed/target\r\n");
+    BSP_UART_Printf("+/- = adjust open-loop speed or closed-loop target\r\n");
+    // 【新增】：三个角度测试热键提示
+    BSP_UART_Printf("j/k/l = (Closed-loop) Set target to -30/120/210 deg\r\n");
+    BSP_UART_Printf("------------------------------\r\n");
+    BSP_UART_Printf("log format = %s\r\n", Testbench_GetLogFormatName(s_tb_log_format));
+    BSP_UART_Printf("Select: ");
+}
+
+static void Testbench_ToggleLogFormat(void)
+{
+    if (s_tb_log_format == TESTBENCH_LOGFMT_SEMANTIC) {
+        s_tb_log_format = TESTBENCH_LOGFMT_RAW;
+    } else {
+        s_tb_log_format = TESTBENCH_LOGFMT_SEMANTIC;
+    }
+
+    BSP_UART_Printf("[TB] log format=%s\r\n", Testbench_GetLogFormatName(s_tb_log_format));
+}
+
+static void Testbench_EnterSlot(TestbenchSlot_t new_slot)
+{
+    TbMotorCmd_t cmd;
+
+    s_tb_slot = new_slot;
+    s_tb_print_snapshot_req = true;
+
+    Testbench_ReadMotorCmd(&cmd);
+
+    if (new_slot == TESTBENCH_SLOT_MENU) {
+        Testbench_PrintMainMenu();
+        return;
+    }
+
+    if (new_slot == TESTBENCH_SLOT_MOTOR_OPEN) {
+        cmd.cmd = TB_MOTOR_CMD_IDLE;
+        cmd.open_loop_speed_raw_per_tick = 0;
+        Testbench_WriteMotorCmd(&cmd);
+    } else if (new_slot == TESTBENCH_SLOT_MOTOR_CLOSED) {
+        cmd.cmd = TB_MOTOR_CMD_IDLE;
+        cmd.closed_loop_target_ext_raw = 0;
+        Testbench_WriteMotorCmd(&cmd);
+    }
+
+    BSP_UART_Printf("\r\n[TB] enter slot=%s\r\n", Testbench_GetSlotName(new_slot));
+}
+
+static void Testbench_HandleMotorCommandInput(uint8_t ch)
+{
+    TbMotorCmd_t cmd;
+
+    Testbench_ReadMotorCmd(&cmd);
+
+    switch (ch) {
+        case 'a':
+        case 'A':
+            cmd.cmd = TB_MOTOR_CMD_ALIGN;
+            BSP_UART_Printf("[TB] motor cmd=ALIGN\r\n");
+            break;
+
+        case 'g':
+        case 'G':
+            if (s_tb_slot == TESTBENCH_SLOT_MOTOR_OPEN) {
+                cmd.cmd = TB_MOTOR_CMD_OPEN_LOOP;
+                BSP_UART_Printf("[TB] motor cmd=OPEN_LOOP speed=%d raw_per_tick\r\n",
+                                (int)cmd.open_loop_speed_raw_per_tick);
+            } else if (s_tb_slot == TESTBENCH_SLOT_MOTOR_CLOSED) {
+                cmd.cmd = TB_MOTOR_CMD_CLOSED_LOOP;
+                BSP_UART_Printf("[TB] motor cmd=CLOSED_LOOP target_ext=%ld\r\n",
+                                (long)cmd.closed_loop_target_ext_raw);
+            }
+            break;
+
+        case 's':
+        case 'S':
+            cmd.cmd = TB_MOTOR_CMD_IDLE;
+            BSP_UART_Printf("[TB] motor cmd=IDLE\r\n");
+            break;
+
+        case 'e':
+        case 'E':
+            cmd.cmd = TB_MOTOR_CMD_ESTOP;
+            BSP_UART_Printf("[TB] motor cmd=ESTOP\r\n");
+            break;
+
+        case 'z':
+        case 'Z':
+            if (s_tb_slot == TESTBENCH_SLOT_MOTOR_OPEN) {
+                cmd.open_loop_speed_raw_per_tick = 0;
+                BSP_UART_Printf("[TB] open-loop speed=0\r\n");
+            } else if (s_tb_slot == TESTBENCH_SLOT_MOTOR_CLOSED) {
+                cmd.closed_loop_target_ext_raw = 0;
+                BSP_UART_Printf("[TB] closed-loop target_ext=0\r\n");
+            }
+            break;
+
+        case '+':
+            if (s_tb_slot == TESTBENCH_SLOT_MOTOR_OPEN) {
+                cmd.open_loop_speed_raw_per_tick =
+                        Testbench_ClampOpenLoopSpeed((int16_t)(cmd.open_loop_speed_raw_per_tick +
+                                                               TB_MOTOR_OPEN_LOOP_SPEED_STEP));
+                BSP_UART_Printf("[TB] open-loop speed=%d raw_per_tick\r\n",
+                                (int)cmd.open_loop_speed_raw_per_tick);
+            } else if (s_tb_slot == TESTBENCH_SLOT_MOTOR_CLOSED) {
+                cmd.closed_loop_target_ext_raw =
+                        Testbench_ClampExtRaw(cmd.closed_loop_target_ext_raw +
+                                              TB_MOTOR_CLOSED_LOOP_TARGET_STEP);
+                BSP_UART_Printf("[TB] closed-loop target_ext=%ld\r\n",
+                                (long)cmd.closed_loop_target_ext_raw);
+            }
+            break;
+
+        case '-':
+            if (s_tb_slot == TESTBENCH_SLOT_MOTOR_OPEN) {
+                cmd.open_loop_speed_raw_per_tick =
+                        Testbench_ClampOpenLoopSpeed((int16_t)(cmd.open_loop_speed_raw_per_tick -
+                                                               TB_MOTOR_OPEN_LOOP_SPEED_STEP));
+                BSP_UART_Printf("[TB] open-loop speed=%d raw_per_tick\r\n",
+                                (int)cmd.open_loop_speed_raw_per_tick);
+            } else if (s_tb_slot == TESTBENCH_SLOT_MOTOR_CLOSED) {
+                cmd.closed_loop_target_ext_raw =
+                        Testbench_ClampExtRaw(cmd.closed_loop_target_ext_raw -
+                                              TB_MOTOR_CLOSED_LOOP_TARGET_STEP);
+                BSP_UART_Printf("[TB] closed-loop target_ext=%ld\r\n",
+                                (long)cmd.closed_loop_target_ext_raw);
+            }
+            break;
+
+            /* --- 【新增】：快捷角度跳转指令 --- */
+        case 'j':
+        case 'J':
+            if (s_tb_slot == TESTBENCH_SLOT_MOTOR_CLOSED) {
+                cmd.closed_loop_target_ext_raw = 341;
+                BSP_UART_Printf("[TB] target_ext set to 341 (30 deg)\r\n");
+            }
+            break;
+
+        case 'k':
+        case 'K':
+            if (s_tb_slot == TESTBENCH_SLOT_MOTOR_CLOSED) {
+                cmd.closed_loop_target_ext_raw = 1365;
+                BSP_UART_Printf("[TB] target_ext set to 1365 (120 deg)\r\n");
+            }
+            break;
+
+        case 'l':
+        case 'L':
+            if (s_tb_slot == TESTBENCH_SLOT_MOTOR_CLOSED) {
+                cmd.closed_loop_target_ext_raw = 2389;
+                BSP_UART_Printf("[TB] target_ext set to 2389 (210 deg)\r\n");
+            }
+            break;
+
+        default:
+            break;
+    }
+
+    Testbench_WriteMotorCmd(&cmd);
+}
+
 static void Testbench_PollConsole(void)
 {
     uint8_t ch;
@@ -568,346 +661,641 @@ static void Testbench_PollConsole(void)
             continue;
         }
 
-        if (s_tb_mode == TESTBENCH_MODE_MENU) {
-            switch (ch) {
-                case '0':
-                    Testbench_EnterMode(TESTBENCH_MODE_MOD_DEBUG);
-                    break;
+        BSP_UART_Printf("[TB] input echo=%c\r\n", (char)ch);
 
-                case '1':
-                    Testbench_EnterMode(TESTBENCH_MODE_BLDC_3POS);
-                    break;
+        switch (ch) {
+            case '0':
+                Testbench_EnterSlot(TESTBENCH_SLOT_RC);
+                break;
 
-                case '2':
-                    Testbench_EnterMode(TESTBENCH_MODE_RC_MANUAL);
-                    break;
+            case '1':
+                Testbench_EnterSlot(TESTBENCH_SLOT_MOTOR_ALIGN);
+                break;
 
-                case '3':
-                    Testbench_EnterMode(TESTBENCH_MODE_AUTO_FIXED);
-                    break;
+            case '2':
+                Testbench_EnterSlot(TESTBENCH_SLOT_MOTOR_OPEN);
+                break;
 
-                default:
-                    Testbench_PrintMainMenu();
-                    break;
-            }
-        } else {
-            switch (ch) {
-                case 'q':
-                case 'Q':
-                    Testbench_EnterMode(TESTBENCH_MODE_MENU);
-                    break;
+            case '3':
+                Testbench_EnterSlot(TESTBENCH_SLOT_MOTOR_CLOSED);
+                break;
 
-                case 'p':
-                case 'P':
-                    s_tb_print_snapshot_req = true;
-                    break;
+            case '4':
+                Testbench_EnterSlot(TESTBENCH_SLOT_RC_MANUAL);
+                break;
 
-                default:
-                    break;
-            }
+            case 'q':
+            case 'Q':
+                Testbench_EnterSlot(TESTBENCH_SLOT_MENU);
+                break;
+
+            case 'p':
+            case 'P':
+                s_tb_print_snapshot_req = true;
+                break;
+
+            case 'v':
+            case 'V':
+                Testbench_ToggleLogFormat();
+                break;
+
+            case 'h':
+            case 'H':
+                Testbench_PrintMainMenu();
+                break;
+
+            default:
+                if ((s_tb_slot == TESTBENCH_SLOT_MOTOR_ALIGN) ||
+                    (s_tb_slot == TESTBENCH_SLOT_MOTOR_OPEN) ||
+                    (s_tb_slot == TESTBENCH_SLOT_MOTOR_CLOSED))
+                {
+                    Testbench_HandleMotorCommandInput(ch);
+                }
+                break;
         }
     }
 }
 
-/**
- * @brief  Execute TB0: module debug with direct analog CH1 control.
- * @param  current_tick_ms Current system time in milliseconds.
- * @param  p_motion_state Latest motion feedback.
- * @param  p_out_cmd Output command toward Motion.
- * @param  p_out_dbg Output debug RC analog data.
- */
-static void Testbench_RunModuleDebug(uint32_t current_tick_ms,
-                                     const DataHub_State_t *p_motion_state,
-                                     DataHub_Cmd_t *p_out_cmd,
-                                     RcDebugAnalogData_t *p_out_dbg)
+/* ============================================================================
+ * 9. RC Logging
+ * ========================================================================== */
+
+static void Testbench_PrintRcSnapshotSemantic(void)
 {
-    int16_t step_deg;
-    uint8_t roll_degree;
+    RcControlData_t semantic;
+    RcDebugAnalogData_t debug;
+    uint16_t raw[DRV_ELRS_MAX_CHANNELS];
+    AraStatus_t raw_status;
+    bool rc_init;
 
-    if ((p_motion_state == NULL) || (p_out_cmd == NULL) || (p_out_dbg == NULL)) {
-        return;
-    }
+    memset(&semantic, 0, sizeof(RcControlData_t));
+    memset(&debug, 0, sizeof(RcDebugAnalogData_t));
+    memset(raw, 0, sizeof(raw));
 
-    if (Testbench_RunModeEntryGuard(p_motion_state, p_out_cmd)) {
-        memset(p_out_dbg, 0, sizeof(RcDebugAnalogData_t));
-        p_out_dbg->is_link_up = false;
-        p_out_dbg->req_mode = (uint8_t)ARA_MODE_IDLE;
-        p_out_dbg->estop_state = (uint8_t)ESTOP_ACTIVE;
-        p_out_dbg->ch1_percent = 0;
-        p_out_dbg->aux_knob_val = 0U;
-        p_out_dbg->sys_reset_pulse = false;
-        return;
-    }
+    TaskRc_Update((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS), &semantic);
+    TaskRc_UpdateDebugAnalog((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS), &debug);
+    raw_status = TaskRc_CopyRawChannels(raw, DRV_ELRS_MAX_CHANNELS);
+    rc_init = TaskRc_IsInitialized();
 
-    TaskRc_UpdateDebugAnalog(current_tick_ms, p_out_dbg);
+    BSP_UART_Printf("[RC] init=%s link=%s raw_copy=%s mode=%s estop=%s arm=%s grip=%s reset=%d aux=%u ch1_pct=%d\r\n",
+                    rc_init ? "OK" : "FAIL",
+                    semantic.is_link_up ? "UP" : "DOWN",
+                    Testbench_GetStatusName(raw_status),
+                    Testbench_GetAraModeName(semantic.req_mode),
+                    Testbench_GetEstopName(semantic.estop_state),
+                    Testbench_GetArmCmdName(semantic.arm_cmd),
+                    Testbench_GetGripperCmdName(semantic.gripper_cmd),
+                    (int)semantic.sys_reset_pulse,
+                    (unsigned int)semantic.aux_knob_val,
+                    (int)debug.ch1_percent);
+}
 
-    if (p_out_dbg->sys_reset_pulse) {
-        p_out_cmd->sys_mode = ARA_MODE_INIT;
-        p_out_cmd->emergency_stop = false;
-        p_out_cmd->target_foc_angle = Testbench_DemoAngleToRaw(TESTBENCH_DEMO_PARK_DEG);
-        return;
-    }
+static void Testbench_PrintRcManualSnapshot(void) {
+    TbMotorStateReport_t motor;
+    Testbench_ReadMotorState(&motor);
 
-    if ((!p_out_dbg->is_link_up) || (p_out_dbg->estop_state == (uint8_t)ESTOP_ACTIVE)) {
-        p_out_cmd->sys_mode = ARA_MODE_ERROR;
-        p_out_cmd->emergency_stop = true;
-        p_out_cmd->target_foc_angle = Testbench_DemoAngleToRaw(s_tb_moddbg_target_deg);
-        Testbench_CommandAuxActuators(0U, 0U);
-        return;
-    }
+    uint16_t cur_deg = Testbench_MapExtToDegree(motor.ext_raw);
+    uint16_t tgt_deg = Testbench_MapExtToDegree(motor.closed_loop_target_ext_raw);
 
-    step_deg = (int16_t)(p_out_dbg->ch1_percent / TESTBENCH_MODDBG_CH1_DIVISOR);
-    if ((p_out_dbg->ch1_percent <= TESTBENCH_MODDBG_CH1_DEADBAND_PCT) &&
-        (p_out_dbg->ch1_percent >= (-TESTBENCH_MODDBG_CH1_DEADBAND_PCT)))
-    {
-        step_deg = 0;
-    }
-
-    if (step_deg != 0) {
-        int32_t next_target = (int32_t)s_tb_moddbg_target_deg + (int32_t)step_deg;
-        if (next_target < (int32_t)TESTBENCH_DEMO_MIN_DEG) {
-            next_target = (int32_t)TESTBENCH_DEMO_MIN_DEG;
-        } else if (next_target > (int32_t)TESTBENCH_DEMO_MAX_DEG) {
-            next_target = (int32_t)TESTBENCH_DEMO_MAX_DEG;
-        }
-        s_tb_moddbg_target_deg = (uint16_t)next_target;
-    }
-
-    roll_degree = Testbench_MapAuxToRollDegree(p_out_dbg->aux_knob_val);
-
-    p_out_cmd->sys_mode = ARA_MODE_MANUAL;
-    p_out_cmd->emergency_stop = false;
-    p_out_cmd->target_foc_angle = Testbench_DemoAngleToRaw(s_tb_moddbg_target_deg);
-
-    Testbench_CommandAuxActuators(0U, roll_degree);
+    BSP_UART_Printf("[MANUAL] SYS:%s | LINK:%s | ES:%s | CH1:%d%% | TGT:%u deg | CUR:%u deg | ERR:%ld | UQ:%d\r\n",
+                    Testbench_GetAraModeName(s_tb_rc_semantic.req_mode),
+                    s_tb_rc_semantic.is_link_up ? "UP" : "DOWN",
+                    Testbench_GetEstopName(s_tb_rc_semantic.estop_state),
+                    (int)s_tb_rc_ch1_percent,
+                    (unsigned int)tgt_deg,
+                    (unsigned int)cur_deg,
+                    (long)motor.error_ext,
+                    (int)motor.pid_out_uq);
 }
 
 /**
- * @brief  Execute TB1: BLDC three-target closed-loop demo.
- * @param  p_motion_state Latest motion feedback.
- * @param  p_out_cmd Output command toward Motion.
+ * @brief 将 RC 语义直接映射到电机控制指令 (MANUAL 模式演示)
  */
-static void Testbench_RunBldcThreeTarget(const DataHub_State_t *p_motion_state,
-                                         DataHub_Cmd_t *p_out_cmd)
+static void Testbench_UpdateRcBridge(void) {
+    if (s_tb_slot != TESTBENCH_SLOT_RC_MANUAL) return;
+
+    if (!s_tb_rc_semantic.is_link_up) return;
+
+    TbMotorCmd_t cmd;
+    Testbench_ReadMotorCmd(&cmd);
+
+    // 逻辑：SC开关 (Gripper语义) 控制模式
+    if (s_tb_rc_semantic.gripper_cmd == GRIPPER_CMD_OPEN) {
+        cmd.cmd = TB_MOTOR_CMD_OPEN_LOOP;
+        cmd.open_loop_speed_raw_per_tick = (int16_t)(s_tb_rc_ch1_percent / 10);
+    } else if (s_tb_rc_semantic.gripper_cmd == GRIPPER_CMD_CLOSE) {
+        cmd.cmd = TB_MOTOR_CMD_CLOSED_LOOP;
+        // 映射：CH1 [-100, 100] -> [0, 4095] ext_raw
+        cmd.closed_loop_target_ext_raw = ((int32_t)s_tb_rc_ch1_percent + 100) * 4095 / 200;
+    } else {
+        cmd.cmd = TB_MOTOR_CMD_IDLE;
+    }
+
+    Testbench_WriteMotorCmd(&cmd);
+}
+
+static void Testbench_PrintRcSnapshotRaw(void)
 {
-    uint16_t target_deg;
+    RcControlData_t semantic;
+    uint16_t raw[DRV_ELRS_MAX_CHANNELS];
+    AraStatus_t raw_status;
+    bool rc_init;
 
-    if ((p_motion_state == NULL) || (p_out_cmd == NULL)) {
+    memset(&semantic, 0, sizeof(RcControlData_t));
+    memset(raw, 0, sizeof(raw));
+
+    TaskRc_Update((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS), &semantic);
+    raw_status = TaskRc_CopyRawChannels(raw, DRV_ELRS_MAX_CHANNELS);
+    rc_init = TaskRc_IsInitialized();
+
+    BSP_UART_Printf("[RC] raw init=%d link=%d raw_status=%d\r\n",
+                    (int)rc_init,
+                    (int)semantic.is_link_up,
+                    (int)raw_status);
+
+    BSP_UART_Printf("[RC] ch01=%u ch02=%u ch03=%u ch04=%u ch05=%u ch06=%u ch07=%u ch08=%u\r\n",
+                    (unsigned int)raw[0], (unsigned int)raw[1], (unsigned int)raw[2], (unsigned int)raw[3],
+                    (unsigned int)raw[4], (unsigned int)raw[5], (unsigned int)raw[6], (unsigned int)raw[7]);
+
+    BSP_UART_Printf("[RC] ch09=%u ch10=%u ch11=%u ch12=%u ch13=%u ch14=%u ch15=%u ch16=%u\r\n",
+                    (unsigned int)raw[8], (unsigned int)raw[9], (unsigned int)raw[10], (unsigned int)raw[11],
+                    (unsigned int)raw[12], (unsigned int)raw[13], (unsigned int)raw[14], (unsigned int)raw[15]);
+}
+
+/* ============================================================================
+ * 10. Motor Bench Core
+ * ========================================================================== */
+
+static void TbMotor_StopPowerStage(TbMotorBenchContext_t *p_ctx)
+{
+    BSP_PWM_StopAll();
+    DrvBldc_Enable(&p_ctx->motor_driver, false);
+}
+
+static AraStatus_t TbMotor_ApplyFocOutputs(TbMotorBenchContext_t *p_ctx)
+{
+    return DrvBldc_SetDuties(&p_ctx->motor_driver,
+                             p_ctx->foc_algo.duty_a,
+                             p_ctx->foc_algo.duty_b,
+                             p_ctx->foc_algo.duty_c);
+}
+
+static int16_t TbMotor_RunPositionController(TbMotorBenchContext_t *p_ctx, int32_t pos_error_ext)
+{
+    int16_t error_q15;
+
+    error_q15 = Testbench_ExtErrorToQ15(pos_error_ext);
+    return AlgPid_Compute(&p_ctx->pos_pid, error_q15, 0);
+}
+
+static void TbMotor_InitBench(TbMotorBenchContext_t *p_ctx)
+{
+    AraStatus_t init_status;
+
+    memset(p_ctx, 0, sizeof(TbMotorBenchContext_t));
+
+    p_ctx->state = TB_MOTOR_STATE_UNINIT;
+    p_ctx->status = ARA_OK;
+
+    init_status = DrvAS5600_Init(&p_ctx->enc_driver, BSP_I2C_MOTION, NULL);
+    if (init_status != ARA_OK) {
+        p_ctx->status = init_status;
+        p_ctx->state = TB_MOTOR_STATE_ERROR;
         return;
     }
 
-    if (Testbench_RunModeEntryGuard(p_motion_state, p_out_cmd)) {
+    DrvBldc_Init(&p_ctx->motor_driver, BSP_GPIO_MOTOR_EN);
+    AlgFoc_Init(&p_ctx->foc_algo, TB_MOTOR_POLE_PAIRS, BSP_PWM_MAX_DUTY);
+
+    // 直接注入硬件标定零位！
+    AlgFoc_SetZeroOffset(&p_ctx->foc_algo, TB_MOTOR_HARDCODED_ZERO_OFFSET);
+
+    // 【保留之前的修复】：因为编码器与电机相序物理方向相反，必须设为 -1
+    p_ctx->foc_algo.motor_direction = -1;
+
+    // 欺骗状态机，告诉它系统已经对齐，跳过安全拦截
+    p_ctx->aligned = true;
+
+    AlgPid_Init(&p_ctx->pos_pid);
+    AlgPid_SetGains(&p_ctx->pos_pid,
+                    TB_MOTOR_PID_POS_KP_Q8_8,
+                    TB_MOTOR_PID_POS_KI_Q8_8,
+                    TB_MOTOR_PID_POS_KD_Q8_8,
+                    TB_MOTOR_CLOSED_LOOP_UQ_LIMIT_Q15,
+                    TB_MOTOR_PID_INT_MAX); // 此时宏应该是 2560000
+
+    init_status = DrvAS5600_TriggerUpdate(&p_ctx->enc_driver);
+    if ((init_status != ARA_OK) && (init_status != ARA_BUSY)) {
+        p_ctx->status = init_status;
+        p_ctx->state = TB_MOTOR_STATE_ERROR;
         return;
     }
 
-    target_deg = s_tb_bldc_targets_deg[s_tb_bldc_target_idx];
+    p_ctx->initialized = true;
+    p_ctx->state = TB_MOTOR_STATE_IDLE;
+    p_ctx->status = ARA_OK;
+}
 
-    p_out_cmd->sys_mode = ARA_MODE_MANUAL;
-    p_out_cmd->emergency_stop = false;
-    p_out_cmd->target_foc_angle = Testbench_DemoAngleToRaw(target_deg);
+static void TbMotor_UpdateBench(TbMotorBenchContext_t *p_ctx,
+                                const TbMotorCmd_t *p_cmd,
+                                TbMotorStateReport_t *p_out_state)
+{
+    uint16_t current_raw;
+    int16_t current_vel;
+    int32_t current_ext;
+    AraStatus_t trigger_status;
 
-    Testbench_CommandAuxActuators(0U, 0U);
+    if ((p_ctx == NULL) || (p_cmd == NULL) || (p_out_state == NULL)) {
+        return;
+    }
 
-    if (Testbench_IsJointReachedDeg(p_motion_state,
-                                    target_deg,
-                                    TESTBENCH_BLDC_REACH_TOL_DEG))
-    {
-        s_tb_bldc_hold_ticks++;
+    p_ctx->uptime_ticks++;
+    p_ctx->state_ticks++;
 
-        if ((s_tb_bldc_hold_ticks >= TESTBENCH_BLDC_HOLD_TICKS) &&
-            (s_tb_bldc_target_idx < 2U))
+    current_raw = DrvAS5600_GetRawAngle(&p_ctx->enc_driver);
+
+    /* --- 【修复的核心代码】：基于最短路径增量的绝对位置追踪 --- */
+    if (p_ctx->uptime_ticks == 1) {
+        // 第一帧：利用旧的映射公式算出一个初始基准位置
+        p_ctx->continuous_ext_raw = Testbench_MapRawToExt(current_raw);
+        current_vel = 0;
+    } else {
+        // 后续帧：通过带环形翻转处理的测速函数获取增量，完美跨越 0<->4095
+        current_vel = Testbench_CalcVelocity(current_raw, p_ctx->prev_raw_angle);
+        p_ctx->continuous_ext_raw += current_vel;
+    }
+
+    // 赋值给当前扩展坐标，保证 POS 打印和闭环计算使用的是单调平滑数据
+    current_ext = p_ctx->continuous_ext_raw;
+    p_ctx->prev_raw_angle = current_raw;
+    /* -------------------------------------------------------- */
+
+    trigger_status = DrvAS5600_TriggerUpdate(&p_ctx->enc_driver);
+    if ((trigger_status != ARA_OK) && (trigger_status != ARA_BUSY)) {
+        p_ctx->status = trigger_status;
+        p_ctx->state = TB_MOTOR_STATE_ERROR;
+    }
+
+    if (!p_ctx->initialized) {
+        p_ctx->state = TB_MOTOR_STATE_ERROR;
+    }
+
+    if (p_ctx->uptime_ticks < TB_MOTOR_SENSOR_PRIME_TICKS) {
+        TbMotor_StopPowerStage(p_ctx);
+        p_ctx->state = TB_MOTOR_STATE_IDLE;
+    } else {
+        switch (p_cmd->cmd)
         {
-            s_tb_bldc_target_idx++;
-            s_tb_bldc_hold_ticks = 0U;
-            BSP_UART_Printf("[TB1] advance -> target %u deg\r\n",
-                            (unsigned int)s_tb_bldc_targets_deg[s_tb_bldc_target_idx]);
+            case TB_MOTOR_CMD_IDLE:
+            {
+                TbMotor_StopPowerStage(p_ctx);
+                p_ctx->state = TB_MOTOR_STATE_IDLE;
+                if (p_ctx->status == ARA_OK) {
+                    p_ctx->status = ARA_OK;
+                }
+                break;
+            }
+
+            case TB_MOTOR_CMD_ALIGN:
+            {
+                AraStatus_t apply_status;
+
+                if (!p_ctx->aligned && (p_ctx->state != TB_MOTOR_STATE_ALIGNING)) {
+                    p_ctx->state_ticks = 0U;
+                    p_ctx->state = TB_MOTOR_STATE_ALIGNING;
+                    AlgPid_Reset(&p_ctx->pos_pid);
+                }
+
+                if (!p_ctx->aligned) {
+                    DrvBldc_Enable(&p_ctx->motor_driver, true);
+                    AlgFoc_Run(&p_ctx->foc_algo, 0U, 0, TB_MOTOR_ALIGN_VOLTAGE_D_Q15);
+                    apply_status = TbMotor_ApplyFocOutputs(p_ctx);
+
+                    if (apply_status != ARA_OK) {
+                        p_ctx->status = apply_status;
+                        p_ctx->state = TB_MOTOR_STATE_ERROR;
+                        break;
+                    }
+
+                    p_ctx->status = ARA_OK;
+
+                    if (p_ctx->state_ticks >= TB_MOTOR_ALIGN_DURATION_TICKS) {
+                        p_ctx->foc_zero_offset = current_raw;
+                        AlgFoc_SetZeroOffset(&p_ctx->foc_algo, p_ctx->foc_zero_offset);
+                        p_ctx->aligned = true;
+                        TbMotor_StopPowerStage(p_ctx);
+                        p_ctx->state = TB_MOTOR_STATE_IDLE;
+                    }
+                } else {
+                    TbMotor_StopPowerStage(p_ctx);
+                    p_ctx->state = TB_MOTOR_STATE_IDLE;
+                }
+                break;
+            }
+
+            case TB_MOTOR_CMD_OPEN_LOOP:
+            {
+                AraStatus_t apply_status;
+
+                if (!p_ctx->aligned) {
+                    TbMotor_StopPowerStage(p_ctx);
+                    p_ctx->state = TB_MOTOR_STATE_IDLE;
+                    break;
+                }
+
+                if (p_cmd->open_loop_speed_raw_per_tick == 0) {
+                    TbMotor_StopPowerStage(p_ctx);
+                    p_ctx->state = TB_MOTOR_STATE_IDLE;
+                    break;
+                }
+
+                if (p_ctx->state != TB_MOTOR_STATE_OPEN_LOOP) {
+                    p_ctx->open_loop_phase_raw = (int32_t)current_raw;
+                    p_ctx->state = TB_MOTOR_STATE_OPEN_LOOP;
+                }
+
+                p_ctx->open_loop_phase_raw += (int32_t)p_cmd->open_loop_speed_raw_per_tick;
+
+                DrvBldc_Enable(&p_ctx->motor_driver, true);
+                AlgFoc_Run(&p_ctx->foc_algo,
+                           Testbench_WrapRawAngle(p_ctx->open_loop_phase_raw),
+                           TB_MOTOR_OPEN_LOOP_UQ_Q15,
+                           0);
+                apply_status = TbMotor_ApplyFocOutputs(p_ctx);
+
+                if (apply_status != ARA_OK) {
+                    p_ctx->status = apply_status;
+                    p_ctx->state = TB_MOTOR_STATE_ERROR;
+                } else {
+                    p_ctx->status = ARA_OK;
+                }
+                break;
+            }
+
+            case TB_MOTOR_CMD_CLOSED_LOOP:
+            {
+                AraStatus_t apply_status;
+                int32_t pos_error_ext;
+                int16_t torque_uq;
+                int32_t target_ext;
+
+                if (!p_ctx->aligned) {
+                    TbMotor_StopPowerStage(p_ctx);
+                    p_ctx->state = TB_MOTOR_STATE_IDLE;
+                    break;
+                }
+
+                target_ext = Testbench_ClampExtRaw(p_cmd->closed_loop_target_ext_raw);
+                pos_error_ext = target_ext - current_ext;
+                torque_uq = TbMotor_RunPositionController(p_ctx, pos_error_ext);
+
+                DrvBldc_Enable(&p_ctx->motor_driver, true);
+
+                /* --- 【保留修复】：去掉负号，使用正常的级联输出 --- */
+                AlgFoc_Run(&p_ctx->foc_algo, current_raw, torque_uq, 0);
+                /* ------------------------------------------------- */
+
+                apply_status = TbMotor_ApplyFocOutputs(p_ctx);
+
+                if (apply_status != ARA_OK) {
+                    p_ctx->status = apply_status;
+                    p_ctx->state = TB_MOTOR_STATE_ERROR;
+                } else {
+                    p_ctx->status = ARA_OK;
+                    p_ctx->state = TB_MOTOR_STATE_CLOSED_LOOP;
+                }
+
+                p_ctx->last_error_ext = pos_error_ext;
+                p_ctx->last_pid_out_uq = torque_uq;
+                break;
+            }
+
+            case TB_MOTOR_CMD_ESTOP:
+            default:
+            {
+                TbMotor_StopPowerStage(p_ctx);
+                p_ctx->status = ARA_ERROR;
+                p_ctx->state = TB_MOTOR_STATE_ERROR;
+                break;
+            }
+        }
+    }
+
+    p_out_state->initialized = p_ctx->initialized;
+    p_out_state->aligned = p_ctx->aligned;
+    p_out_state->state = p_ctx->state;
+    p_out_state->raw_angle = current_raw;
+    p_out_state->ext_raw = current_ext;  /* POS 的数据源，现在已绝对连续 */
+    p_out_state->velocity_raw_per_ms = current_vel;
+    p_out_state->open_loop_speed_raw_per_tick = p_cmd->open_loop_speed_raw_per_tick;
+    p_out_state->closed_loop_target_ext_raw = Testbench_ClampExtRaw(p_cmd->closed_loop_target_ext_raw);
+    p_out_state->status = p_ctx->status;
+
+    p_out_state->error_ext    = p_ctx->last_error_ext;
+    p_out_state->pid_out_uq   = p_ctx->last_pid_out_uq;
+    p_out_state->pid_integral = p_ctx->pos_pid.integral_sum;
+    p_out_state->kp           = p_ctx->pos_pid.Kp;
+    p_out_state->ki           = p_ctx->pos_pid.Ki;
+    p_out_state->kd           = p_ctx->pos_pid.Kd;
+}
+
+/* ============================================================================
+ * 11. Motor Logging
+ * ========================================================================== */
+
+static void Testbench_PrintMotorSnapshotSemantic(void)
+{
+    TbMotorStateReport_t st;
+
+    Testbench_ReadMotorState(&st);
+
+    BSP_UART_Printf("[MOTOR] init=%s aligned=%s run=%s raw=%u ext=%ld vel=%d open_spd=%d target_ext=%ld status=%s\r\n",
+                    st.initialized ? "OK" : "FAIL",
+                    st.aligned ? "YES" : "NO",
+                    Testbench_GetMotorStateName(st.state),
+                    (unsigned int)st.raw_angle,
+                    (long)st.ext_raw,
+                    (int)st.velocity_raw_per_ms,
+                    (int)st.open_loop_speed_raw_per_tick,
+                    (long)st.closed_loop_target_ext_raw,
+                    Testbench_GetStatusName(st.status));
+}
+static void Testbench_PrintClosedLoopSnapshotSemantic(void) {
+    TbMotorStateReport_t st;
+    Testbench_ReadMotorState(&st);
+
+    // 调用新增的映射函数获取物理角度
+    uint16_t degree = Testbench_MapExtToDegree(st.ext_raw);
+
+    // 格式：[PID] POS/TGT | ERR | UQ/I | P/I/D | DEG | 状态
+    BSP_UART_Printf("[PID] POS:%ld TGT:%ld | ERR:%ld | UQ:%d I:%ld | P:%d I:%d D:%d | DEG:%u | %s\r\n",
+                    (long)st.ext_raw, (long)st.closed_loop_target_ext_raw,
+                    (long)st.error_ext, (int)st.pid_out_uq, (long)st.pid_integral,
+                    (int)st.kp, (int)st.ki, (int)st.kd,
+                    (unsigned int)degree,
+                    Testbench_GetStatusName(st.status));
+}
+
+static void Testbench_PrintMotorSnapshotRaw(void)
+{
+    TbMotorStateReport_t st;
+
+    Testbench_ReadMotorState(&st);
+
+    BSP_UART_Printf("[MOTOR] raw init=%d aligned=%d state=%d raw=%u ext=%ld vel=%d open_spd=%d tgt=%ld status=%d\r\n",
+                    (int)st.initialized,
+                    (int)st.aligned,
+                    (int)st.state,
+                    (unsigned int)st.raw_angle,
+                    (long)st.ext_raw,
+                    (int)st.velocity_raw_per_ms,
+                    (int)st.open_loop_speed_raw_per_tick,
+                    (long)st.closed_loop_target_ext_raw,
+                    (int)st.status);
+}
+
+/* ============================================================================
+ * 12. Snapshot Routing / LED
+ * ========================================================================== */
+
+static void Testbench_PrintCurrentSnapshot(void)
+{
+    if (s_tb_slot == TESTBENCH_SLOT_RC) {
+        if (s_tb_log_format == TESTBENCH_LOGFMT_SEMANTIC) {
+            Testbench_PrintRcSnapshotSemantic();
+        } else {
+            Testbench_PrintRcSnapshotRaw();
+        }
+    } else if (s_tb_slot == TESTBENCH_SLOT_MOTOR_CLOSED) {
+        /* 闭环模式专属路由 */
+        if (s_tb_log_format == TESTBENCH_LOGFMT_SEMANTIC) {
+            Testbench_PrintClosedLoopSnapshotSemantic();
+        } else {
+            Testbench_PrintMotorSnapshotRaw();
+        }
+    } else if ((s_tb_slot == TESTBENCH_SLOT_MOTOR_ALIGN) ||
+               (s_tb_slot == TESTBENCH_SLOT_MOTOR_OPEN))
+    {
+        /* 对齐与开环模式维持原有格式 */
+        if (s_tb_log_format == TESTBENCH_LOGFMT_SEMANTIC) {
+            Testbench_PrintMotorSnapshotSemantic();
+        } else {
+            Testbench_PrintMotorSnapshotRaw();
+        }
+    }
+}
+
+static void Testbench_UpdateStatusLed(void)
+{
+    TbMotorStateReport_t st;
+
+    Testbench_ReadMotorState(&st);
+
+    if (st.status != ARA_OK) {
+        if ((s_tb_low_freq_tick % 20U) == 0U) {
+            DEV_Status_LED_ToggleLed();
         }
     } else {
-        s_tb_bldc_hold_ticks = 0U;
+        if ((s_tb_low_freq_tick % 100U) == 0U) {
+            DEV_Status_LED_ToggleLed();
+        }
     }
 }
 
-/**
- * @brief  Execute TB2: ELRS MANUAL demo.
- * @param  current_tick_ms Current system time in milliseconds.
- * @param  p_motion_state Latest motion feedback.
- * @param  p_out_cmd Output command toward Motion.
- * @param  p_out_rc Output RC semantic data.
- */
-static void Testbench_RunRcManual(uint32_t current_tick_ms,
-                                  const DataHub_State_t *p_motion_state,
-                                  DataHub_Cmd_t *p_out_cmd,
-                                  RcControlData_t *p_out_rc)
-{
-    if ((p_motion_state == NULL) || (p_out_cmd == NULL) || (p_out_rc == NULL)) {
-        return;
-    }
+/* ============================================================================
+ * 13. Physical Threads
+ * ========================================================================== */
 
-    if (Testbench_RunModeEntryGuard(p_motion_state, p_out_cmd)) {
-        memset(p_out_rc, 0, sizeof(RcControlData_t));
-        return;
-    }
-
-    TaskRc_Update(current_tick_ms, p_out_rc);
-
-    if (p_out_rc->is_link_up) {
-        p_out_rc->req_mode = ARA_MODE_MANUAL;
-    }
-
-    TaskManipulator_Update(p_out_rc, p_motion_state, p_out_cmd);
-}
-
-/**
- * @brief  Execute TB3: AUTO fixed-flow demo.
- * @param  current_tick_ms Current system time in milliseconds.
- * @param  p_motion_state Latest motion feedback.
- * @param  p_out_cmd Output command toward Motion.
- * @param  p_out_rc Output RC semantic data.
- */
-static void Testbench_RunAutoFixed(uint32_t current_tick_ms,
-                                   const DataHub_State_t *p_motion_state,
-                                   DataHub_Cmd_t *p_out_cmd,
-                                   RcControlData_t *p_out_rc)
-{
-    if ((p_motion_state == NULL) || (p_out_cmd == NULL) || (p_out_rc == NULL)) {
-        return;
-    }
-
-    if (Testbench_RunModeEntryGuard(p_motion_state, p_out_cmd)) {
-        memset(p_out_rc, 0, sizeof(RcControlData_t));
-        return;
-    }
-
-    TaskRc_Update(current_tick_ms, p_out_rc);
-    TaskManipulator_Update(p_out_rc, p_motion_state, p_out_cmd);
-}
-
-/**
- * @brief  High-frequency 1kHz physical thread.
- * @param  argument Unused.
- */
 static void Thread_Testbench_HighFreq_Ctrl(void *argument)
 {
     TickType_t last_wake_time;
-    DataHub_Cmd_t in_cmd;
-    DataHub_State_t out_state;
+    TbMotorBenchContext_t motor_ctx;
+    TbMotorCmd_t motor_cmd;
+    TbMotorStateReport_t motor_state;
 
     (void)argument;
 
-    memset(&in_cmd, 0, sizeof(DataHub_Cmd_t));
-    memset(&out_state, 0, sizeof(DataHub_State_t));
+    memset(&motor_cmd, 0, sizeof(TbMotorCmd_t));
+    memset(&motor_state, 0, sizeof(TbMotorStateReport_t));
 
-    TaskMotion_Init();
+    TbMotor_InitBench(&motor_ctx);
+    Testbench_WriteMotorState(&motor_state);
 
     last_wake_time = xTaskGetTickCount();
 
     for (;;) {
-        DataHub_ReadCmd(&in_cmd);
-        TaskMotion_Update(&in_cmd, &out_state);
-        DataHub_WriteState(&out_state);
+        Testbench_ReadMotorCmd(&motor_cmd);
+        TbMotor_UpdateBench(&motor_ctx, &motor_cmd, &motor_state);
+        Testbench_WriteMotorState(&motor_state);
 
         vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(TESTBENCH_HIGH_FREQ_PERIOD_MS));
     }
 }
 
-/**
- * @brief  Low-frequency 50Hz physical thread.
- * @param  argument Unused.
- */
 static void Thread_Testbench_LowFreq_Logic(void *argument)
 {
     TickType_t last_wake_time;
-    uint32_t current_tick_ms;
-    DataHub_Cmd_t out_cmd;
-    DataHub_State_t motion_state;
-    RcControlData_t rc_data;
-    RcDebugAnalogData_t rc_dbg;
+    TbMotorCmd_t motor_cmd;
 
     (void)argument;
 
-    memset(&out_cmd, 0, sizeof(DataHub_Cmd_t));
-    memset(&motion_state, 0, sizeof(DataHub_State_t));
-    memset(&rc_data, 0, sizeof(RcControlData_t));
-    memset(&rc_dbg, 0, sizeof(RcDebugAnalogData_t));
+    memset(&motor_cmd, 0, sizeof(TbMotorCmd_t));
+    motor_cmd.cmd = TB_MOTOR_CMD_IDLE;
+    motor_cmd.open_loop_speed_raw_per_tick = 0;
+    motor_cmd.closed_loop_target_ext_raw = 0;
+    Testbench_WriteMotorCmd(&motor_cmd);
 
     TaskRc_Init();
-    TaskManipulator_Init();
-    Testbench_EnsureActuatorInit();
 
     last_wake_time = xTaskGetTickCount();
-    Testbench_EnterMode(TESTBENCH_MODE_MENU);
+    Testbench_EnterSlot(TESTBENCH_SLOT_MENU);
 
     for (;;) {
         s_tb_low_freq_tick++;
-        current_tick_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-
         Testbench_PollConsole();
-        DataHub_ReadState(&motion_state);
 
-        out_cmd.sys_mode = ARA_MODE_IDLE;
-        out_cmd.emergency_stop = false;
-        out_cmd.target_foc_angle = Testbench_DemoAngleToRaw(TESTBENCH_DEMO_PARK_DEG);
+    // 【核心修复】：每 20ms 只调用一次 Update 驱动引擎！
+        uint32_t tick = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        TaskRc_Update(tick, &s_tb_rc_semantic);
 
-        memset(&rc_data, 0, sizeof(RcControlData_t));
-        memset(&rc_dbg, 0, sizeof(RcDebugAnalogData_t));
+        if (s_tb_rc_semantic.is_link_up) {
+            TaskRc_CopyRawChannels(s_tb_rc_raw_channels, DRV_ELRS_MAX_CHANNELS);
 
-        switch (s_tb_mode) {
-            case TESTBENCH_MODE_MOD_DEBUG:
-                Testbench_RunModuleDebug(current_tick_ms,
-                                         &motion_state,
-                                         &out_cmd,
-                                         &rc_dbg);
-                break;
+            int32_t ch1_raw = (int32_t)s_tb_rc_raw_channels[MOD_RC_IDX_CH1];
 
-            case TESTBENCH_MODE_BLDC_3POS:
-                Testbench_RunBldcThreeTarget(&motion_state, &out_cmd);
-                break;
+            /* --- 【修复】：强制转换为有符号整数计算，防止下溢变异 --- */
+            int32_t percent = ((ch1_raw - (int32_t)MOD_RC_VAL_MID) * 100) /
+                              ((int32_t)MOD_RC_VAL_MAX - (int32_t)MOD_RC_VAL_MID);
+            /* ----------------------------------------------------- */
 
-            case TESTBENCH_MODE_RC_MANUAL:
-                Testbench_RunRcManual(current_tick_ms,
-                                      &motion_state,
-                                      &out_cmd,
-                                      &rc_data);
-                break;
-
-            case TESTBENCH_MODE_AUTO_FIXED:
-                Testbench_RunAutoFixed(current_tick_ms,
-                                       &motion_state,
-                                       &out_cmd,
-                                       &rc_data);
-                break;
-
-            case TESTBENCH_MODE_MENU:
-            default:
-                Testbench_CommandAuxActuators(0U, 0U);
-                break;
+            // 钳位到 [-100, 100]
+            if (percent > 100) percent = 100;
+            if (percent < -100) percent = -100;
+            s_tb_rc_ch1_percent = (int16_t)percent;
+        } else {
+            s_tb_rc_ch1_percent = 0;
         }
 
-        DataHub_WriteCmd(&out_cmd);
-        Testbench_UpdateStatusLed(&out_cmd);
+        // 运行桥接逻辑
+        Testbench_UpdateRcBridge();
 
-        if (((s_tb_low_freq_tick % TESTBENCH_LOG_INTERVAL_TICKS) == 0U) ||
-            s_tb_print_snapshot_req)
-        {
-            if (s_tb_mode == TESTBENCH_MODE_MOD_DEBUG) {
-                Testbench_PrintSnapshot(&out_cmd, &motion_state, NULL, &rc_dbg);
-            } else if ((s_tb_mode == TESTBENCH_MODE_RC_MANUAL) ||
-                       (s_tb_mode == TESTBENCH_MODE_AUTO_FIXED))
-            {
-                Testbench_PrintSnapshot(&out_cmd, &motion_state, &rc_data, NULL);
+        // 更新日志路由
+        if (s_tb_print_snapshot_req || (s_tb_low_freq_tick % TESTBENCH_LOG_INTERVAL_TICKS == 0)) {
+            if (s_tb_slot == TESTBENCH_SLOT_RC_MANUAL) {
+                Testbench_PrintRcManualSnapshot();
             } else {
-                Testbench_PrintSnapshot(&out_cmd, &motion_state, NULL, NULL);
+                Testbench_PrintCurrentSnapshot();
             }
-
             s_tb_print_snapshot_req = false;
         }
 
+        Testbench_UpdateStatusLed();
         vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(TESTBENCH_LOW_FREQ_PERIOD_MS));
     }
 }
 
 /* ============================================================================
- * 4. Public API
+ * 14. Public API
  * ========================================================================== */
 
 void App_Testbench_Init(void)

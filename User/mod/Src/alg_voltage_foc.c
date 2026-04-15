@@ -43,6 +43,7 @@ void AlgFoc_Init(AlgFoc_Context_t *ctx, uint8_t pole_pairs, uint16_t pwm_period)
     ctx->pole_pairs = pole_pairs;
     ctx->pwm_period = pwm_period;
     ctx->zero_offset = 0;
+    ctx->motor_direction = 1; // 默认正向
 
     // Reset runtime state
     ctx->electric_angle = 0;
@@ -64,8 +65,14 @@ void AlgFoc_Run(AlgFoc_Context_t *ctx, uint16_t raw_angle_12bit, int16_t u_q, in
     if (ctx == NULL) return;
 
     /* --- 1. Electrical Angle Calculation --- */
-    // Raw (12-bit) -> Corrected Mechanical
-    int16_t mech_angle = (int16_t)(raw_angle_12bit & 0x0FFF) - (int16_t)ctx->zero_offset;
+    int16_t mech_angle;
+
+    // 【修复】：引入极性反转逻辑
+    if (ctx->motor_direction == -1) {
+        mech_angle = (int16_t)ctx->zero_offset - (int16_t)(raw_angle_12bit & 0x0FFF);
+    } else {
+        mech_angle = (int16_t)(raw_angle_12bit & 0x0FFF) - (int16_t)ctx->zero_offset;
+    }
 
     // Normalize to [0, 4095] (Handle negative wrap)
     // 0x0FFF is 4095.
