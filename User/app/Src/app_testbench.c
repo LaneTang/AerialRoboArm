@@ -19,6 +19,7 @@
 #include "drv_bldc_power.h"
 #include "alg_voltage_foc.h"
 #include "alg_pid.h"
+#include "mod_actuator.h"
 #include "bsp_pwm.h"
 
 #include "FreeRTOS.h"
@@ -36,8 +37,18 @@ typedef enum {
     TESTBENCH_SLOT_MOTOR_ALIGN,
     TESTBENCH_SLOT_MOTOR_OPEN,
     TESTBENCH_SLOT_MOTOR_CLOSED,
-    TESTBENCH_SLOT_RC_MANUAL
+    TESTBENCH_SLOT_RC_MANUAL,
+    TESTBENCH_SLOT_ACTUATOR_CALIB,  // <--- 新增 Slot 5
+    TESTBENCH_SLOT_RC_AUTO         // <--- 新增 Slot 6
 } TestbenchSlot_t;
+
+/* 新增自动流状态枚举 */
+typedef enum {
+    AUTO_STATE_IDLE = 0,
+    AUTO_STATE_GOING_HOME,      // 前往 +15°
+    AUTO_STATE_GOING_PICK,      // 前往 +120° (此阶段开启遥测)
+    AUTO_STATE_DONE
+} AutoSequenceState_t;
 
 typedef enum {
     TESTBENCH_LOGFMT_SEMANTIC = 0,
@@ -47,6 +58,21 @@ typedef enum {
 static RcControlData_t s_tb_rc_semantic;
 static uint16_t        s_tb_rc_raw_channels[DRV_ELRS_MAX_CHANNELS]; // 旁路原始数据缓存
 static int16_t         s_tb_rc_ch1_percent;                         // 算出的 CH1 百分比
+
+/* ============================================================================
+ * 新增：二进制遥测协议 (PID 动态响应)
+ * ========================================================================== */
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  header[2]; // 固定包头：0xAA, 0xBB
+    int16_t  target;    // 目标角度 (ext_raw)
+    int16_t  pos;       // 实际角度 (ext_raw)
+    int16_t  uq;        // 输出力矩
+    uint8_t  crc;       // 简单的异或校验和
+} PidTelemetryFrame_t;
+#pragma pack(pop)
+
+static bool s_tb_binary_stream_active = false; // 二进制流开关
 
 /* ============================================================================
  * 2. Motor Bench Internal Types
@@ -129,11 +155,11 @@ typedef struct {
 #define TB_MOTOR_ALIGN_VOLTAGE_D_Q15        (16384)
 #define TB_MOTOR_ALIGN_DURATION_TICKS       (2000U)
 
-#define TB_MOTOR_OPEN_LOOP_UQ_Q15           (8192)
+#define TB_MOTOR_OPEN_LOOP_UQ_Q15           (16384)
 #define TB_MOTOR_OPEN_LOOP_SPEED_STEP       (1)
 #define TB_MOTOR_OPEN_LOOP_SPEED_MAX        (20)
 
-#define TB_MOTOR_HARDCODED_ZERO_OFFSET      (258U)
+#define TB_MOTOR_HARDCODED_ZERO_OFFSET      (887U)
 
 #define TB_MOTOR_PID_ERR_FULL_SCALE_EXT     (1024)
 #define TB_MOTOR_CLOSED_LOOP_UQ_LIMIT_Q15   (12000)
@@ -158,6 +184,13 @@ static bool s_tb_print_snapshot_req = false;
 
 static TbMotorCmd_t s_tb_motor_cmd;
 static TbMotorStateReport_t s_tb_motor_state;
+
+static ModActuator_Context_t s_tb_actuator_ctx; // Actuator 上下文实例
+
+/* 全局控制变量 */
+static AutoSequenceState_t s_auto_fsm = AUTO_STATE_IDLE;
+static uint32_t s_auto_hold_ticks = 0;
+extern bool s_tb_binary_stream_active; // 引用之前定义的二进制流开关
 
 /* ============================================================================
  * 5. Generic Helpers
@@ -343,6 +376,10 @@ static const char *Testbench_GetSlotName(TestbenchSlot_t slot)
             return "MOTOR_CLOSED";
         case TESTBENCH_SLOT_RC_MANUAL:
             return "RC_MANUAL_DEMO";
+        case TESTBENCH_SLOT_ACTUATOR_CALIB:
+            return "ACTUATOR_CALIB";
+        case TESTBENCH_SLOT_RC_AUTO:
+            return "RC_AUTO_STEP_TEST";
         default:
             return "UNKNOWN";
     }
@@ -480,6 +517,8 @@ static void Testbench_PrintMainMenu(void)
     BSP_UART_Printf("2. Motor open-loop test\r\n");
     BSP_UART_Printf("3. Motor closed-loop test\r\n");
     BSP_UART_Printf("4. RC Manual Demo (SC=Mode, CH1=Speed/Pos)\r\n"); // 新增提示
+    BSP_UART_Printf("5. Actuator Calib (CH3=Roll, CH8=Gripper)\r\n"); // <--- 新增
+    BSP_UART_Printf("6. RC Auto Step Test (CH3=Trigger 15->120 deg)\r\n");
     BSP_UART_Printf("------------------------------\r\n");
     BSP_UART_Printf("h = print menu\r\n");
     BSP_UART_Printf("p = print one-shot snapshot\r\n");
@@ -683,6 +722,12 @@ static void Testbench_PollConsole(void)
             case '4':
                 Testbench_EnterSlot(TESTBENCH_SLOT_RC_MANUAL);
                 break;
+            case '5':
+                Testbench_EnterSlot(TESTBENCH_SLOT_ACTUATOR_CALIB);
+                break;
+            case '6':
+                Testbench_EnterSlot(TESTBENCH_SLOT_RC_AUTO);
+                break;
 
             case 'q':
             case 'Q':
@@ -748,6 +793,31 @@ static void Testbench_PrintRcSnapshotSemantic(void)
                     (int)semantic.sys_reset_pulse,
                     (unsigned int)semantic.aux_knob_val,
                     (int)debug.ch1_percent);
+}
+
+/* 增加 Slot 5 专用的打印函数 */
+static void Testbench_PrintActuatorCalibSnapshot(void)
+{
+    RcDebugAnalogData_t debug;
+    uint32_t tick = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+
+    TaskRc_UpdateDebugAnalog(tick, &debug);
+
+    BSP_UART_Printf("[CALIB] LINK:%s | CH3->Roll: %u deg | CH8->Gripper: %u deg\r\n",
+                    debug.is_link_up ? "UP" : "DOWN",
+                    (unsigned int)debug.roll_angle,
+                    (unsigned int)debug.gripper_angle);
+}
+
+/* 增加专属日志回显 */
+static void Testbench_PrintAutoSnapshot(void) {
+    TbMotorStateReport_t motor;
+    Testbench_ReadMotorState(&motor);
+
+    BSP_UART_Printf("[AUTO] FSM:%d | CH3:%u | TGT:%ld | CUR:%ld | ERR:%ld | REC:%s\r\n",
+                    s_auto_fsm, s_tb_rc_raw_channels[MOD_RC_IDX_CH3],
+                    (long)motor.closed_loop_target_ext_raw, (long)motor.ext_raw,
+                    (long)motor.error_ext, s_tb_binary_stream_active ? "ON" : "OFF");
 }
 
 static void Testbench_PrintRcManualSnapshot(void) {
@@ -1099,6 +1169,26 @@ static void TbMotor_UpdateBench(TbMotorBenchContext_t *p_ctx,
     p_out_state->kd           = p_ctx->pos_pid.Kd;
 }
 
+static void Testbench_UpdateActuatorCalib(void)
+{
+    if (s_tb_slot != TESTBENCH_SLOT_ACTUATOR_CALIB) return;
+
+    RcDebugAnalogData_t debug;
+    uint32_t tick = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+
+    TaskRc_UpdateDebugAnalog(tick, &debug);
+
+    if (!debug.is_link_up) return;
+
+    /* 架构师注：
+     * 这里我们故意“越权”调用了底层的 DrvServo_SetAngle，而不是上层的 ModActuator_SetGripper。
+     * 因为 SetGripper 是基于 0-100% 的业务插值，而我们现在的目的是“标定”，
+     * 必须绕过插值，直接向舵机发送 0~180 的原始度数，来探测它到底在多少度会卡住！
+     */
+    DrvServo_SetAngle(&s_tb_actuator_ctx.servo_roll, debug.roll_angle);
+    DrvServo_SetAngle(&s_tb_actuator_ctx.servo_gripper, debug.gripper_angle);
+}
+
 /* ============================================================================
  * 11. Motor Logging
  * ========================================================================== */
@@ -1185,6 +1275,71 @@ static void Testbench_PrintCurrentSnapshot(void)
     }
 }
 
+static void Testbench_UpdateAutoSequence(void) {
+    if (s_tb_slot != TESTBENCH_SLOT_RC_AUTO) {
+        s_auto_fsm = AUTO_STATE_IDLE;
+        return;
+    }
+
+    TbMotorCmd_t cmd;
+    TbMotorStateReport_t st;
+    Testbench_ReadMotorCmd(&cmd);
+    Testbench_ReadMotorState(&st);
+
+    // 1. 监控 RC CH3 触发信号 (s_tb_rc_raw_channels 在上一步已实现全局缓存)
+    // CH3 (Throttle) 映射到 100% 约为 1811
+    bool trigger = (s_tb_rc_raw_channels[MOD_RC_IDX_CH3] > 1750);
+
+    switch (s_auto_fsm) {
+        case AUTO_STATE_IDLE:
+            if (trigger) {
+                s_auto_fsm = AUTO_STATE_GOING_HOME;
+                BSP_UART_Printf("[AUTO] Triggered! Moving to Home (+15deg)\r\n");
+            }
+            break;
+
+        case AUTO_STATE_GOING_HOME:
+            cmd.cmd = TB_MOTOR_CMD_CLOSED_LOOP;
+            cmd.closed_loop_target_ext_raw = 171; // +15°
+
+            // 判断是否到位 (误差 < 12 且速度极低)
+            if (Testbench_Abs32(st.error_ext) < 12 && Testbench_Abs32(st.velocity_raw_per_ms) < 2) {
+                s_auto_hold_ticks++;
+                if (s_auto_hold_ticks > 10) { // 稳定 200ms
+                    s_auto_fsm = AUTO_STATE_GOING_PICK;
+                    s_auto_hold_ticks = 0;
+                    s_tb_binary_stream_active = true; // 【关键】：开始高频记录动态响应
+                    BSP_UART_Printf("[AUTO] Home Reached. Step to Pick (+120deg) & Recording...\r\n");
+                }
+            } else {
+                s_auto_hold_ticks = 0;
+            }
+            break;
+
+        case AUTO_STATE_GOING_PICK:
+            cmd.closed_loop_target_ext_raw = 1365; // +120°
+
+            if (Testbench_Abs32(st.error_ext) < 12) {
+                s_auto_hold_ticks++;
+                if (s_auto_hold_ticks > 50) { // 到位后继续记录 1 秒以观察超调稳态
+                    s_auto_fsm = AUTO_STATE_DONE;
+                    s_tb_binary_stream_active = false; // 停止记录
+                    BSP_UART_Printf("[AUTO] Sequence Done. Telemetry Stopped.\r\n");
+                }
+            }
+            break;
+
+        case AUTO_STATE_DONE:
+            if (!trigger) { // 等待摇杆复位后才允许下次触发
+                s_auto_fsm = AUTO_STATE_IDLE;
+                cmd.cmd = TB_MOTOR_CMD_IDLE;
+            }
+            break;
+    }
+
+    Testbench_WriteMotorCmd(&cmd);
+}
+
 static void Testbench_UpdateStatusLed(void)
 {
     TbMotorStateReport_t st;
@@ -1223,11 +1378,38 @@ static void Thread_Testbench_HighFreq_Ctrl(void *argument)
 
     last_wake_time = xTaskGetTickCount();
 
+    uint32_t loop_tick = 0;
+
     for (;;) {
         Testbench_ReadMotorCmd(&motor_cmd);
         TbMotor_UpdateBench(&motor_ctx, &motor_cmd, &motor_state);
         Testbench_WriteMotorState(&motor_state);
 
+        loop_tick++;
+
+        // 仅在闭环模式下，且开启了二进制流，进行 200Hz 降采样发送
+        if (motor_ctx.state == TB_MOTOR_STATE_CLOSED_LOOP && s_tb_binary_stream_active) {
+            if (loop_tick % 5 == 0) { // 5ms = 200Hz
+                PidTelemetryFrame_t frame;
+                frame.header[0] = 0xAA;
+                frame.header[1] = 0xBB;
+                // 为了压缩数据，将 int32_t 的 ext_raw 强转为 int16_t
+                // (前提是测试小范围响应，差值在 +/- 32767 内)
+                frame.target = (int16_t) motor_state.closed_loop_target_ext_raw;
+                frame.pos = (int16_t) motor_state.ext_raw;
+                frame.uq = motor_state.pid_out_uq;
+
+                // 计算 Checksum (XOR)
+                uint8_t *p_data = (uint8_t *) &frame.target;
+                frame.crc = 0;
+                for (int i = 0; i < 6; i++) {
+                    frame.crc ^= p_data[i];
+                }
+
+                // 调用非阻塞 DMA 发送
+                BSP_UART_Send_DMA(BSP_UART_DEBUG, (uint8_t *) &frame, sizeof(frame));
+            }
+        }
         vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(TESTBENCH_HIGH_FREQ_PERIOD_MS));
     }
 }
@@ -1246,6 +1428,7 @@ static void Thread_Testbench_LowFreq_Logic(void *argument)
     Testbench_WriteMotorCmd(&motor_cmd);
 
     TaskRc_Init();
+//    ModActuator_Init(&s_tb_actuator_ctx); // <--- 初始化舵机模块
 
     last_wake_time = xTaskGetTickCount();
     Testbench_EnterSlot(TESTBENCH_SLOT_MENU);
@@ -1254,9 +1437,15 @@ static void Thread_Testbench_LowFreq_Logic(void *argument)
         s_tb_low_freq_tick++;
         Testbench_PollConsole();
 
-    // 【核心修复】：每 20ms 只调用一次 Update 驱动引擎！
+        // 更新自动流状态机
+        Testbench_UpdateAutoSequence();
+
         uint32_t tick = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
         TaskRc_Update(tick, &s_tb_rc_semantic);
+
+        // <--- 运行标定桥接逻辑
+//        Testbench_UpdateActuatorCalib();
+//
 
         if (s_tb_rc_semantic.is_link_up) {
             TaskRc_CopyRawChannels(s_tb_rc_raw_channels, DRV_ELRS_MAX_CHANNELS);
@@ -1283,6 +1472,12 @@ static void Thread_Testbench_LowFreq_Logic(void *argument)
         if (s_tb_print_snapshot_req || (s_tb_low_freq_tick % TESTBENCH_LOG_INTERVAL_TICKS == 0)) {
             if (s_tb_slot == TESTBENCH_SLOT_RC_MANUAL) {
                 Testbench_PrintRcManualSnapshot();
+            }
+//            if (s_tb_slot == TESTBENCH_SLOT_ACTUATOR_CALIB) {
+//                Testbench_PrintActuatorCalibSnapshot(); // <--- 专属日志路由
+//            }
+            else if (s_tb_slot == TESTBENCH_SLOT_RC_AUTO) {
+                Testbench_PrintAutoSnapshot();
             } else {
                 Testbench_PrintCurrentSnapshot();
             }

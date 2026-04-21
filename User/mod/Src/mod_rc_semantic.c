@@ -122,6 +122,23 @@ static bool update_sb_reset_pulse(ModRcSemantic_Context_t *p_ctx,
     return pulse_out;
 }
 
+/**
+ * @brief  Map an analog channel to physical degree [0, 180].
+ */
+static uint8_t map_analog_degree(uint16_t ch_val)
+{
+    uint32_t range;
+    uint32_t value;
+
+    if (ch_val < MOD_RC_VAL_MIN) ch_val = MOD_RC_VAL_MIN;
+    if (ch_val > MOD_RC_VAL_MAX) ch_val = MOD_RC_VAL_MAX;
+
+    range = (uint32_t)MOD_RC_VAL_MAX - (uint32_t)MOD_RC_VAL_MIN;
+    value = (uint32_t)ch_val - (uint32_t)MOD_RC_VAL_MIN;
+
+    return (uint8_t)((value * 180U) / range);
+}
+
 /* =========================================================
  * API Implementation
  * ========================================================= */
@@ -253,6 +270,9 @@ AraStatus_t ModRcSemantic_ProcessDebugAnalog(ModRcSemantic_Context_t *p_ctx,
 
     sb_now = map_3pos(channels[MOD_RC_IDX_SB]);
     out_data->sys_reset_pulse = update_sb_reset_pulse(p_ctx, sb_now, current_tick_ms);
+
+    out_data->roll_angle = map_analog_degree(channels[MOD_RC_IDX_CH3]);
+    out_data->gripper_angle = map_analog_degree(channels[MOD_RC_IDX_SF]); // CH8 就是 SF
 
     return ARA_OK;
 }

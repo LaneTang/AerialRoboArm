@@ -37,7 +37,8 @@
 #define MOD_RC_CH1_EXIT_HOLD_ABS_PCT (35)
 
 /* Channel Mapping Indices (CRSF array is 0-indexed) */
-#define MOD_RC_IDX_CH1 0U  /**< CH1: Stick X axis (Arm analog intent). */
+#define MOD_RC_IDX_CH1 0U  /**< CH1: Stick RX axis (Arm analog intent). */
+#define MOD_RC_IDX_CH3 2U  /**< CH3: Stick LY axis (Arm analog intent). */
 #define MOD_RC_IDX_SA  4U  /**< CH5: Mode request switch (2-pos). */
 #define MOD_RC_IDX_SE  5U  /**< CH6: Reserved / legacy input. */
 #define MOD_RC_IDX_SC  6U  /**< CH7: Gripper switch (3-pos). */
@@ -68,6 +69,10 @@ typedef struct {
     int16_t  ch1_percent;      /**< CH1 normalized to [-100, +100]. */
     uint16_t aux_knob_val;     /**< SF normalized to [0, 1000]. */
     bool     sys_reset_pulse;  /**< Edge-triggered SB pulse. */
+
+    /* --- 新增：专门用于标定的绝对角度语义 --- */
+    uint8_t  roll_angle;       /**< 映射自 CH3，范围 [0, 180] 度 */
+    uint8_t  gripper_angle;    /**< 映射自 CH8 (SF)，范围 [0, 180] 度 */
 } RcDebugAnalogData_t;
 
 /* =========================================================

@@ -56,8 +56,8 @@ void BSP_PWM_Init(void)
 
     /* [Step 3] Start Servo PWM Channels (TIM2) */
     // TIM2 是通用定时器，不需要 MOE
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+//    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+//    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
 }
 
 void BSP_PWM_Set3PhaseDuty_U16(uint16_t u, uint16_t v, uint16_t w)
