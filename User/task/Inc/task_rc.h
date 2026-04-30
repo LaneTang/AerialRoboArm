@@ -1,70 +1,77 @@
 /**
  * @file task_rc.h
- * @brief RC Data Collection and Semantic Dispatch Task (L4)
- * @note  FreeRTOS Task. Aggregates L2 (DRV_ELRS) and L3 (MOD_RC_SEMANTIC).
- * Periodically polls the receiver, parses semantics, and updates the DataHub.
+ * @brief RC Data Collection & Semantic Logic Runnable (L4)
+ * @note  Extracts high-level intent from raw L2 ELRS data. This task owns
+ *        L2 ELRS driver orchestration and L3 semantic mapping.
  */
 
 #ifndef TASK_RC_H
 #define TASK_RC_H
 
 #include "ara_def.h"
+#include "datahub.h"
 #include "drv_elrs.h"
 #include "mod_rc_semantic.h"
-#include "datahub.h"
 
 /* =========================================================
- * 1. Task Configuration
- * ========================================================= */
-
-/* Task execution period in milliseconds (e.g., 20ms = 50Hz) */
-#define TASK_RC_PERIOD_MS   (20U)
-
-
-/* =========================================================
- * 2. Task Context Structure
+ * 1. Task Context
  * ========================================================= */
 
 /**
- * @brief RC Task Context (Aggregation of L2 and L3 components)
- * @note  Follows the Object-Oriented context pattern.
+ * @brief RC task runtime context.
  */
 typedef struct {
-    /* --- State --- */
-    uint32_t                tick_count;       // Current OS Tick
-    bool                    is_initialized;   // Initialization flag
-
-    /* --- Components (L2 & L3 Aggregation) --- */
-    DrvElrs_Context_t       elrs_driver;      // L2: Hardware-agnostic ELRS driver
-    ModRcSemantic_Context_t semantic_logic;   // L3: Pure logic semantic parser
-
-    /* --- Output Cache --- */
-    RcControlData_t         last_intent;      // Cached semantic intent to be pushed to DataHub
+    bool                    is_initialized; /**< Combined init state of owned dependencies. */
+    DrvElrs_Context_t       elrs_driver;    /**< Owned L2 ELRS driver. */
+    ModRcSemantic_Context_t semantic_logic; /**< Owned L3 semantic module. */
 } TaskRc_Context_t;
 
-
 /* =========================================================
- * 3. Task API
+ * 2. API
  * ========================================================= */
 
 /**
- * @brief Initialize the RC Task components
- * @note  Must be called BEFORE the FreeRTOS scheduler starts.
- * Internally initializes DrvElrs (L2) and ModRcSemantic (L3).
+ * @brief  Initialize RC task dependencies.
+ * @note   This binds the ELRS driver to the dedicated UART device and seeds
+ *         the semantic module with safe default channels.
  */
 void TaskRc_Init(void);
 
 /**
- * @brief The Main RC Task Entry Point (FreeRTOS Task Function)
- * @param argument Pointer to task parameters (usually NULL)
- * @note  Infinite loop structure:
- * 1. vTaskDelayUntil() for periodic execution.
- * 2. Calls DrvElrs_Update() to process UART RingBuffer.
- * 3. Checks Link Status. If Link Down -> triggers GLOBAL ESTOP via DataHub.
- * 4. Calls ModRcSemantic_Process() to extract high-level intent.
- * 5. Calls DataHub_WriteRcData() to publish the intent for L4/L5 consumers.
+ * @brief  Execute one formal RC semantic update step.
+ * @param  current_tick_ms Current system tick in milliseconds.
+ * @param  p_out_intent Output semantic intent for manipulator / upper logic.
+ * @note   This API is intended for formal MANUAL / AUTO system flows.
+ *         When link is down or initialization failed, safe failsafe intent
+ *         is emitted.
  */
-void TaskRc_Entry(void *argument);
+void TaskRc_Update(uint32_t current_tick_ms, RcControlData_t *p_out_intent);
 
+/**
+ * @brief  Execute one debug RC analog update step.
+ * @param  current_tick_ms Current system tick in milliseconds.
+ * @param  p_out_debug Output debug-oriented analog RC data.
+ * @note   This API is intended for TB0 module debugging scenarios where CH1
+ *         should be observed as direct analog percentage rather than collapsed
+ *         into EXTEND / RETRACT / HOLD semantics.
+ */
+void TaskRc_UpdateDebugAnalog(uint32_t current_tick_ms,
+                              RcDebugAnalogData_t *p_out_debug);
+
+/**
+ * @brief  Query whether TaskRc has completed dependency initialization.
+ * @return true if initialized successfully, otherwise false.
+ */
+bool TaskRc_IsInitialized(void);
+
+/**
+ * @brief  Copy the latest valid raw ELRS channel snapshot.
+ * @param  p_out_channels Output buffer for all raw channels.
+ * @param  out_count Number of elements available in @p p_out_channels.
+ * @return ARA_OK on success,
+ *         ARA_ERR_PARAM on invalid input,
+ *         ARA_ERR_DISCONNECTED when link is currently down or TaskRc is not initialized.
+ */
+AraStatus_t TaskRc_CopyRawChannels(uint16_t *p_out_channels, uint8_t out_count);
 
 #endif /* TASK_RC_H */

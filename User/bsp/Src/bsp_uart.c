@@ -15,7 +15,7 @@
 #include "task.h"
 
 /* --- Configuration --- */
-#define UART_RX_BUF_SIZE    (256)   // 必须是2的幂
+#define UART_RX_BUF_SIZE    (512)   // 必须是2的幂
 #define UART_TX_TIMEOUT_MS  (100)   // 信号量等待超时时间
 
 /* --- Hardware Resources --- */

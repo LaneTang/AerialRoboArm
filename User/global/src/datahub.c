@@ -1,123 +1,116 @@
 /**
  * @file datahub.c
- * @brief Global Data Exchange Center (L4) Implementation
- * @note  Implements thread-safe access to system state and cross-task data.
+ * @brief Global Lock-Free Data Exchange Center Implementation (L4)
+ * @note  Strictly NO FreeRTOS Mutexes. Uses CPU-level interrupt masking
+ * (Critical Sections) to guarantee atomicity and prevent data tearing.
+ * Execution time is guaranteed to be under 1 microsecond (72MHz).
  */
 
 #include "datahub.h"
-#include <string.h>
-
-/* [FreeRTOS Includes] */
 #include "FreeRTOS.h"
-#include "semphr.h"
 #include "task.h"
+#include <stddef.h>
 
 /* =========================================================
- * Internal Storage (The "Blackboard")
+ * 1. Private Static Memory Allocations (.bss)
  * ========================================================= */
 
-/* 1. Global System Mode */
-static AraSysMode_t    global_sys_mode;
-
-/* 2. RC Semantic Data Cache */
-static RcControlData_t global_rc_data;
-
-/* =========================================================
- * IPC Resources (Inter-Process Communication)
- * ========================================================= */
-
-/* Mutex to protect the RC Control Data struct */
-static SemaphoreHandle_t rc_data_mutex = NULL;
-
-/* * Note on `global_sys_mode`:
- * Since AraSysMode_t is a standard enum (32-bit integer on ARM Cortex-M3),
- * its assignment is natively atomic. However, to be perfectly strict and
- * prevent any compiler reordering issues, we will use FreeRTOS Critical
- * Sections (taskENTER_CRITICAL) which are ultra-fast for simple variable access.
+/**
+ * @brief The actual physical memory blocks for cross-thread exchange.
+ * @note Statically allocated. Total RAM footprint: ~12 bytes.
  */
-
+static DataHub_Cmd_t   s_cmd_hub;
+static DataHub_State_t s_state_hub;
 
 /* =========================================================
- * API Implementation
+ * 2. API Implementations
  * ========================================================= */
 
+/**
+ * @brief Initialize the DataHub with safe default states.
+ * @note  Must be called before FreeRTOS scheduler starts.
+ */
 void DataHub_Init(void)
 {
-    /* 1. Initialize System Mode to Safe Boot State */
-    global_sys_mode = ARA_MODE_INIT;
-
-    /* 2. Initialize RC Data to Safe Defaults (Failsafe) */
-    memset(&global_rc_data, 0, sizeof(RcControlData_t));
-    global_rc_data.is_link_up  = false;
-    global_rc_data.estop_state = ESTOP_ACTIVE;  // System locked by default
-    global_rc_data.arm_cmd     = ARM_CMD_HOLD;
-    global_rc_data.gripper_cmd = GRIPPER_CMD_STOP;
-
-    /* 3. Create Mutex for complex structs */
-    rc_data_mutex = xSemaphoreCreateMutex();
-
-    /* Ensure mutex creation was successful */
-    configASSERT(rc_data_mutex != NULL);
-}
-
-AraSysMode_t DataHub_GetSysMode(void)
-{
-    AraSysMode_t mode;
-
-    /* Fast critical section for single variable read */
+    /* Protect initialization in case it's called post-scheduler start */
     taskENTER_CRITICAL();
-    mode = global_sys_mode;
-    taskEXIT_CRITICAL();
 
-    return mode;
+    /* --- Command Hub Safe Defaults --- */
+    s_cmd_hub.sys_mode          = ARA_MODE_INIT;
+    s_cmd_hub.emergency_stop    = true;             // CRITICAL: Safe fallback default
+    s_cmd_hub.target_foc_angle  = 0;
+
+    /* --- State Hub Safe Defaults --- */
+    s_state_hub.current_foc_angle = 0;
+    s_state_hub.current_velocity  = 0;
+    s_state_hub.foc_status        = ARA_OK;         // Assume healthy until reported otherwise
+
+    taskEXIT_CRITICAL();
 }
 
-AraStatus_t DataHub_SetSysMode(AraSysMode_t mode)
+/**
+ * @brief Write a new command set to the DataHub (Producer: 50Hz Logic Thread).
+ * @param p_cmd Pointer to the populated command structure.
+ */
+void DataHub_WriteCmd(const DataHub_Cmd_t *p_cmd)
 {
-    /* Fast critical section for single variable write */
+    if (p_cmd == NULL) {
+        return;
+    }
+
+    /* Cortex-M3 instruction: CPSID I (Disable global interrupts) */
     taskENTER_CRITICAL();
-    global_sys_mode = mode;
+
+    /* Direct struct assignment is translated by GCC into a highly optimized
+     * LDM/STM (Load/Store Multiple) block copy or consecutive LDR/STR instructions.
+     * Takes ~4 clock cycles for this small struct. */
+    s_cmd_hub = *p_cmd;
+
+    /* Cortex-M3 instruction: CPSIE I (Enable global interrupts) */
     taskEXIT_CRITICAL();
-
-    return ARA_OK;
 }
 
-AraStatus_t DataHub_WriteRcData(const RcControlData_t *p_rc_data)
+/**
+ * @brief Read the latest command set from the DataHub (Consumer: 1000Hz Motion Thread).
+ * @param p_cmd Pointer to the destination command structure.
+ */
+void DataHub_ReadCmd(DataHub_Cmd_t *p_cmd)
 {
-    if (p_rc_data == NULL || rc_data_mutex == NULL) {
-        return ARA_ERR_PARAM;
+    if (p_cmd == NULL) {
+        return;
     }
 
-    /* Wait up to 10ms to acquire the Mutex */
-    if (xSemaphoreTake(rc_data_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-        /* Safe Memory Copy */
-        memcpy(&global_rc_data, p_rc_data, sizeof(RcControlData_t));
-
-        /* Release the Mutex */
-        xSemaphoreGive(rc_data_mutex);
-        return ARA_OK;
-    }
-
-    /* Mutex timeout (another task held it too long) */
-    return ARA_BUSY;
+    taskENTER_CRITICAL();
+    *p_cmd = s_cmd_hub;
+    taskEXIT_CRITICAL();
 }
 
-AraStatus_t DataHub_ReadRcData(RcControlData_t *p_rc_data)
+/**
+ * @brief Write current hardware state to the DataHub (Producer: 1000Hz Motion Thread).
+ * @param p_state Pointer to the populated state structure.
+ */
+void DataHub_WriteState(const DataHub_State_t *p_state)
 {
-    if (p_rc_data == NULL || rc_data_mutex == NULL) {
-        return ARA_ERR_PARAM;
+    if (p_state == NULL) {
+        return;
     }
 
-    /* Wait up to 10ms to acquire the Mutex */
-    if (xSemaphoreTake(rc_data_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-        /* Safe Memory Copy */
-        memcpy(p_rc_data, &global_rc_data, sizeof(RcControlData_t));
+    taskENTER_CRITICAL();
+    s_state_hub = *p_state;
+    taskEXIT_CRITICAL();
+}
 
-        /* Release the Mutex */
-        xSemaphoreGive(rc_data_mutex);
-        return ARA_OK;
+/**
+ * @brief Read the latest hardware state from the DataHub (Consumer: 50Hz Logic Thread).
+ * @param p_state Pointer to the destination state structure.
+ */
+void DataHub_ReadState(DataHub_State_t *p_state)
+{
+    if (p_state == NULL) {
+        return;
     }
 
-    /* Mutex timeout */
-    return ARA_BUSY;
+    taskENTER_CRITICAL();
+    *p_state = s_state_hub;
+    taskEXIT_CRITICAL();
 }

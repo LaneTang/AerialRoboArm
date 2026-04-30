@@ -15,6 +15,8 @@ typedef struct {
     /* --- Configuration (Set via Init) --- */
     uint8_t  pole_pairs;      // Motor pole pairs
     uint16_t pwm_period;      // Max PWM Duty Count (ARR value)
+    // 新增：电机方向极性 (1: 默认, -1: 反转)
+    int8_t   motor_direction;
 
     /* --- Calibration --- */
     uint16_t zero_offset;     // Mechanical zero position (0-4095)

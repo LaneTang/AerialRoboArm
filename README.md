@@ -1,169 +1,193 @@
-# AerialRoboArm (ARA) - 机载折叠机械臂控制系统
+# AerialRoboArm
 
-[![Generic badge](https://img.shields.io/badge/MCU-STM32-blue.svg)](https://www.st.com/)
-[![Generic badge](https://img.shields.io/badge/RTOS-FreeRTOS-orange.svg)](https://www.freertos.org/)
-[![Generic badge](https://img.shields.io/badge/Control-SimpleFOC-green.svg)](https://simplefoc.com/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)]()
+**A lightweight UAV-mounted robotic arm electrical-control prototype based on STM32F103, FreeRTOS, BLDC motor control, AS5600 feedback, and ELRS remote input.**
 
-## 项目简介 (Introduction)
+[中文版本](./README-zh.md)
 
-**AerialRoboArm (ARA)** 是一个专为机载环境（如无人机挂载）设计的轻量化、可折叠机械臂实验平台。目前项目还在原型验证开发中，下文提到的各项设计与实现均为初版，未来将持续迭代优化。
+This repository presents the finalized engineering implementation of my undergraduate thesis project. The thesis document itself is not included here; this repository focuses on the firmware, electrical-control architecture, hardware context, and final demo materials behind the project.
 
-本项目旨在解决空中抓取任务中对**载荷重量敏感**与**控制精度要求高**之间的矛盾。通过采用 **STM32** 作为主控核心，结合 **SimpleFOC** 矢量控制算法驱动无刷电机（BLDC），实现了机械臂在平面内的稳定位置闭环与快速响应。软件架构基于 **FreeRTOS** 实时操作系统，采用分层模块化设计，具备良好的扩展性与移植性。
+<p align="center">
+  <img src="Figures/DEMO/整机系统全览图.jpg" width="72%" alt="AerialRoboArm full system overview" />
+</p>
 
-##  核心特性 (Key Features)
+<p align="center">
+  <img src="Figures/DEMO/电控系统原型控制平台.jpg" width="42%" alt="Electrical-control prototype platform" />
+  <img src="Figures/DEMO/编码器与关节电机安装实物图.jpg" width="42%" alt="AS5600 encoder and BLDC joint motor installation" />
+</p>
 
-* **轻量化设计**：采用 2804 云台电机直驱与连杆折叠机构，极致压缩自重。
-* **高精度控制**：基于 FOC（磁场定向控制）算法与外环 PID 位置控制，实现平滑、无抖动的关节运动。
-* **分层软件架构**：严格遵循 L1-L5 分层设计，实现业务逻辑与硬件驱动解耦。
-* **实时多任务**：基于 FreeRTOS (Heap_4) 管理运动控制、传感器融合与人机交互任务。
-* **低成本方案**：使用 SimpleFOCMini 驱动板与 AS5600 磁编码器，大幅降低硬件门槛。
+## Overview
 
----
+AerialRoboArm is an embedded electrical-control prototype for a lightweight foldable robotic arm intended for UAV-mounted operation. The project explores how to build a compact control subsystem under tight MCU resource constraints while still supporting motor control, remote operation, staged validation, and practical engineering observability.
 
-## 系统架构 (System Architecture)
+The finalized `demo_v6` version is organized as an engineering case study rather than a general-purpose robotics framework. Its main value is the complete control chain: STM32F103 peripheral abstraction, FreeRTOS task organization, BLDC motor control, AS5600 position feedback, ELRS remote-control semantics, and an on-board serial testbench for final demonstration.
 
-本项目软件遵循模块化分层设计原则，确保代码的高内聚低耦合。
+## One more thing
 
-![Software Architecture](Figures/README/SwArct.png)
-ED --> BSP_GPIO
+This project would not have been possible without my AI-native development workflow: **DACMAS** -- the **Designer - APIer - Coder Multi-Agent System**.
 
-### 软件分层说明
+In practice, I wrote only a relatively small portion of the final C code directly by hand. The project was developed through a human-in-the-loop AI assist pipeline where I acted as the system owner, context router, contract reviewer, and physical validator. DACMAS separated the work into three AI-assisted roles:
 
-* **L5 Application Layer (应用层)**
-    * `Central Scheduler`: 中央调度器，负责任务编排与系统状态机管理。
-* **L4 Business Logic Layer (业务逻辑层)**
-    * `Motion Control`: 运动控制核心，包含 PID 闭环计算。
-    * `Arm Manipulator`: 机械臂运动学解算。
-    * `DataHub`: 数据交换中心，负责各任务间的高效通信。
-* **L3 Functional Module Layer (功能模块层)**
-    * `Motor Module`: 封装 SimpleFOC 库，提供统一的电机控制接口。
-    * `Logger`: 基于缓冲区的日志系统。
-    * `Cmd Parser`: 指令解析器，处理遥控或上位机指令。
-* **L2 Hardware Driver Layer (硬件驱动层)**
-    * 包含 AS5600 编码器、激光测距模块、ELRS 通信模块及舵机驱动。
-* **L1 BSP Layer (板级支持包)**
-    * 基于 HAL 库，封装 UART (DMA+RingBuf)、I2C (DMA+Mutex)、PWM 等底层操作。
+- **Designer**: maintained the global architecture, system behavior, state-machine intent, and L1-L5 design boundaries.
+- **APIer**: converted design briefs into explicit C contracts, especially `.h` files, data structures, function signatures, and interface constraints.
+- **Coder**: implemented local `.c` files within the contracts, focusing on embedded C details, error handling, stack safety, timing constraints, and hardware-facing behavior.
 
----
+This made the project an **AI-native hardware project**, rather than merely AI-assisted: the core workflow was contract-driven, context-isolated, and validated through real hardware bring-up. My main engineering work was **ALMOST ONLY** to define the architecture, constrain the agents, preserve the source of truth in the repository, review generated code, compile and flash on hardware, observe failures, and feed the right kind of feedback back into the right role.
 
-## 机械与电子设计 (Mechanical & Electronics)
+For the full methodology, see [About AI Assist Pipeline - Share.md](./Doc/About%20AI%20Assist%20Pipeline%20-%20Share.md).
 
-为了实现“机载轻量化”与“系统高集成度”的目标，本项目并未止步于现成的模块拼接，而是同步进行了定制化的机械结构建模与 PCB 电路设计。
+## My Work
 
-### 机械结构优化 (Mechanical Optimization)
+I was responsible for the embedded electrical-control side of the project. My work included:
 
-机械臂本体采用**连杆折叠机构**设计，旨在解决无人机挂载时的空间收纳痛点。
+- STM32F103 firmware architecture and FreeRTOS task organization.
+- BSP and driver integration for UART, I2C, PWM, AS5600 feedback, ELRS input, BLDC power-stage output, and servo output.
+- Fixed-point PID and voltage-FOC control pipeline for the BLDC folding-arm axis.
+- Wrap-safe `ext_raw` position representation for AS5600-based closed-loop control.
+- ELRS remote-control channel parsing and semantic mapping for manual operation, mode control, and safety behavior.
+- Serial testbench design for motor alignment, open-loop test, closed-loop test, RC manual control, AUTO step test, and telemetry observation.
+- Repository documentation aligned with the finalized undergraduate project scope.
 
-![Mechanical Design](Figures/README/mech_design.png)
-*(注：上图展示了当前的连杆传动与齿轮减速方案)*
+For a more detailed contribution breakdown, see [Doc/MY_WORK.md](./Doc/MY_WORK.md).
 
-* **折叠收纳**：通过多连杆机构实现大范围的折叠与展开，收纳状态下重心贴近机身，减少对飞行姿态的影响。
-* **齿轮传动**：自定义齿轮组设计，在保证 BLDC 电机高速响应的同时，提供足够的末端抓取力矩。
-* **迭代开发**：目前结构处于持续迭代中，重点优化连杆的拓扑结构以减轻重量，并增加关键部位的机械强度。
+## What This Repository Contains
 
-### 定制化电路设计 (Custom PCB Design)
+This repository contains the finalized firmware source, curated design notes, hardware-context figures, and demo media for the AerialRoboArm electrical-control subsystem. It does not contain the thesis document itself.
 
-为了摆脱杜邦线连接带来的不稳定性并减小电控体积，项目自主设计了 **ARA电控调试板 (ARA Control Board V0.21)**。
+Key materials include:
 
-![PCB Design](Figures/README/pcb_design.png)
+- STM32CubeMX-generated project configuration and STM32F103 firmware source.
+- Layered user firmware under `User/`, including BSP, drivers, algorithms/modules, tasks, and application/testbench code.
+- HAL, CMSIS, and FreeRTOS dependencies required by the firmware project.
+- Hardware and system figures under `Figures/`.
+- Curated design, hardware, demo, and archive documents under `Doc/`.
 
-* **高集成度**：板载集成了 TB6612 驱动芯片（用于夹爪直流电机控制）、AMS1117 电源管理及 IMU 惯导接口。
-* **接口标准化**：引出了符合 SimpleFOCMini 接口定义的 PWM/Enable 排针，以及用于 Laser/Ultrasonic 传感器的专用接口。
-* **抗干扰设计**：针对机载高频振动与电磁环境，优化了 PCB 走线布局，增强了信号完整性。
+## Demo Media
 
----
+The following media files are used as the repository's visual evidence of the final prototype and validation workflow.
 
-## 硬件环境 (Hardware Setup)
+| Material | Description |
+| --- | --- |
+| [Full system overview](./Figures/DEMO/整机系统全览图.jpg) | Physical view of the integrated prototype. |
+| [Electrical-control prototype platform](./Figures/DEMO/电控系统原型控制平台.jpg) | STM32-based control platform and wiring context. |
+| [Encoder and joint motor installation](./Figures/DEMO/编码器与关节电机安装实物图.jpg) | AS5600 encoder and BLDC joint installation. |
 
-### 核心组件
+**Closed-loop folding-arm demo**
 
-| 组件 | 型号/参数 | 说明 |
-| :--- | :--- | :--- |
-| **主控芯片** | STM32 Series | 高性能 ARM Cortex-M 内核 |
-| **关节电机** | 2804 BLDC | 无刷云台电机，低齿槽转矩 |
-| **电机驱动** | SimpleFOCMini v1.0 | 3路 PWM 输入，最大支持 30V |
-| **位置反馈** | AS5600 | 12-bit 磁编码器，I2C 接口 |
-| **测距传感器** | Laser Sensor | 单点激光测距，用于对地/障碍感知 |
-| **通信链路** | ELRS Receiver | 低延迟远距离遥控接收 |
+![Closed-loop folding-arm physical demo](./Figures/DEMO/实机闭环控制折叠臂模拟动作演示.gif)
 
-### 接线说明 (Wiring)
+**ELRS manual closed-loop control demo**
 
-**2804 电机与驱动板连接：**
-* 电机三相线 (U/V/W) -> 驱动板 OUT (无顺序要求，软件可校准)。
-* 编码器与电机机械连接，I2C 信号线接入 MCU。
+![ELRS manual closed-loop control demo](./Figures/DEMO/基于%20ELRS%20遥控器的手动闭环控制演示.gif)
 
-**SimpleFOCMini 引脚定义：**
+## Final Demo Scope
 
-| 引脚 | 功能 | MCU 连接推荐 | 备注 |
-| :--- | :--- | :--- | :--- |
-| **IN1/2/3** | PWM 输入 | TIM_CHx | 用于控制电机三相电压 |
-| **EN** | 使能输入 | GPIO Output | 高电平有效 |
-| **VCC/GND** | 电源输入 | 12V DC | 推荐 3S 锂电池供电 |
-| **3.3V** | 辅助输出 | - | 仅用于给编码器等低功耗设备供电 |
+The current `demo_v6` firmware is a finalized on-board testbench/demo version. It validates the electrical-control chain shown in the GIF demos:
 
----
+- BLDC motor electrical alignment.
+- Motor open-loop voltage-vector test.
+- 1 kHz single-axis closed-loop position control.
+- AS5600 encoder feedback and continuous `ext_raw` position tracking.
+- BLDC voltage-FOC / SVPWM output through the power stage.
+- ELRS remote-input decoding and semantic mapping.
+- MANUAL bridge from RC input to the motor target.
+- AUTO step test for staged closed-loop response recording.
+- Serial console menu, snapshot logs, and compact telemetry output.
 
-## 开发环境 (Development Environment)
+The active firmware entry in `Core/Src/main.c` calls `App_Testbench_Init()`, which mounts the dual-thread demo/testbench runtime.
 
-* **IDE**: CLion (2025.x+)
-* **Build System**: CMake
-* **Config Tool**: STM32CubeMX
-* **Compiler**: arm-none-eabi-gcc
-* **Debugger**: OpenOCD / DapLink / ST-Link
+## System Architecture
 
-### 快速开始 (Getting Started)
+The firmware is organized as a layered embedded system rather than a flat demo program. The design separates chip-level hardware access, device drivers, reusable control modules, task-level runnables, and the application/testbench container.
 
-1.  **克隆仓库**
-    ```bash
-    git clone [https://github.com/LaneTang/AerialRoboArm.git](https://github.com/LaneTang/AerialRoboArm.git)
-    ```
-2.  **打开项目**
-    使用 CLion 打开项目根目录，等待 CMake 加载完成。
-3.  **配置硬件**
-    根据您的 MCU 型号，在 `STM32CubeMX` 中配置相应的 PWM 输出引脚与 I2C DMA 通道。
-4.  **编译与烧录**
-    点击 Build 并在 Run/Debug Configuration 中配置好下载器，即可烧录。
+**Software layering**
 
----
+<p align="center">
+  <img src="Figures/DEMO/电控系统软件分层架构-en.png" width="86%" alt="AerialRoboArm electrical-control software layering architecture" />
+</p>
 
-## 控制与交互 (Control)
+| Layer | Responsibility | Main Directory |
+| --- | --- | --- |
+| L5 Application | Physical thread containers and demo/testbench orchestration | `User/app` |
+| L4 Task | Motion, RC, and manipulator runnables | `User/task` |
+| L3 Module / Algorithm | PID, voltage FOC, actuator abstraction, RC semantics | `User/mod` |
+| L2 Driver | Device-level hardware drivers | `User/drv` |
+| L1 BSP | STM32 peripheral abstraction | `User/bsp` |
 
-* **遥控模式 (ELRS)**: 通过遥控器摇杆直接映射机械臂角度与夹爪开合。
-* **调试模式**: 连接串口 (Baud 115200)，使用 CLI 指令进行 PID 在线调参或状态监控。
-* **状态指示**: 板载 LED 指示当前系统状态（初始化/校准中/就绪/故障）。
+**Dual-thread runtime scheduling**
 
----
+The final demo runtime follows a dual-rate FreeRTOS structure. A 1 kHz high-frequency control thread handles motor feedback, control computation, FOC output, and PWM update, while a 50 Hz low-frequency logic thread handles console input, RC processing, demo state transitions, logging, and testbench orchestration. `DataHub` decouples command/state exchange between the two timing domains.
 
-## 特别声明：现代化的开发体验 (Powered by Modern Toolchain)
+<p align="center">
+  <img src="Figures/DEMO/电控系统双线程并行调度架构-en.png" width="86%" alt="AerialRoboArm dual-thread parallel scheduling architecture" />
+</p>
 
-本项目代码 **100% 在 CLion + STM32CubeMX 环境下开发完成**。
+**Single-axis closed-loop control**
 
-我们在开发过程中深刻体会到了现代化工具链带来的效率飞跃，在此特别推荐这套“黄金组合”：
+The main folding-arm axis is presented as a position-control loop: target position, fixed-point discrete PID, voltage-FOC / SVPWM output, three-phase power-stage drive, BLDC joint motion, and AS5600 position feedback.
 
-* **优雅的现代化 UI**: 告别上个世纪的界面风格，CLion 提供了赏心悦目的 Dark Mode 与极简视觉设计，让嵌入式开发也能成为一种视觉享受。
-* **极致的代码智能**: 得益于 JetBrains 强大的 IntelliSense 引擎，无论是代码补全、智能导航还是即时重构（Refactoring），都能让编码如丝般顺滑，大幅降低心智负担。
-* **强大的调试能力**: 内置的 OpenOCD/GDB 调试界面直观清晰，支持变量实时监控、内存视图以及 RTOS 任务状态查看，让 Bug 无处遁形。
-* **CMake 构建系统**: 拥抱通用的 CMake 构建方式，配合 STM32CubeMX 的代码生成，真正实现了从底层配置到上层逻辑开发的无缝衔接。
+<p align="center">
+  <img src="Figures/DEMO/单轴位置闭环控制框图-en.png" width="86%" alt="AerialRoboArm single-axis closed-loop position-control block diagram" />
+</p>
 
-如果你还在忍受传统 IDE 匮乏的代码编辑体验（比如说uvision5），臃肿的软件架构带来的低性能与响应速度（比如说Stm32CubeIDE），低项目兼容性（比如说uvision5）和辣眼睛的UI（比如说uvision5），不妨尝试迁移到 CLion，开启全新的嵌入式开发体验！
+## Hardware Platform
 
-[Clion开发stm32指路](https://zhuanlan.zhihu.com/p/145801160)
+The prototype is built around a resource-constrained STM32F103 control platform. The hardware choices emphasize low cost, low weight, and direct relevance to the UAV-mounted robotic-arm scenario.
 
----
+| Component | Role |
+| --- | --- |
+| STM32F103C8T6 | Main embedded controller. |
+| FreeRTOS | Dual-rate runtime scheduling. |
+| BLDC gimbal motor | Folding-arm joint actuator. |
+| SimpleFOCMini / BLDC power stage | Three-phase motor drive interface. |
+| AS5600 magnetic encoder | Joint position feedback over I2C. |
+| ELRS receiver | Low-latency remote-control input. |
+| Servo outputs | Low-frequency gripper / auxiliary actuator outputs. |
+| Custom / prototype control platform | Electrical integration and staged bring-up. |
 
-## 贡献与致谢 (Credits)
+## Repository Structure
 
-本项目核心控制算法基于优秀的开源项目 [SimpleFOC](https://github.com/simplefoc/Arduino-FOC)。
+```text
+Core/          STM32CubeMX-generated core source and interrupt/system files
+Drivers/       STM32 HAL and CMSIS dependencies
+Middlewares/   FreeRTOS middleware
+User/app/      Application and demo/testbench thread containers
+User/task/     Task-level runnables for motion, RC, and manipulator logic
+User/mod/      Algorithms and functional modules such as PID, FOC, and RC semantics
+User/drv/      Device drivers for AS5600, BLDC power stage, ELRS, servo, and status IO
+User/bsp/      MCU peripheral abstraction for UART, I2C, PWM, and GPIO
+Doc/           Curated documentation, contribution summary, demo notes, and archive
+Figures/       README and final demo media
+```
 
-**致谢名单：**
-* **SimpleFOC Community**: 提供了强大的 FOC 算法库与活跃的社区支持。
-* **FreeRTOS**: 提供了稳定高效的实时操作系统，保证了多任务调度的实时性。
+## Documentation
 
-**特别鸣谢：**
-* **灯哥开源 (DengFOC)**: 感谢灯哥在 Bilibili 制作的 [FOC 系列教程](https://space.bilibili.com/493192058) 为本项目提供了宝贵的入门指引。
-* **DengFOC_Lib**: 参考了 [DengFOC](https://github.com/ToanTech/DengFOC_Lib) 的部分实现逻辑，对理解 FOC 底层原理帮助巨大。
+Useful documentation entry points:
 
----
+- [Documentation index](./Doc/README.md)
+- [My work and contribution boundary](./Doc/MY_WORK.md)
+- [Final demo notes](./Doc/demo/final-demo.md)
+- [System constitution](./Doc/design/00_SYSTEM_CONSTITUTION.md)
+- [Runtime architecture](./Doc/design/01_RUNTIME_ARCHITECTURE.md)
+- [Pin map](./Doc/hardware/pinmap.md)
 
-*Document generated by ARA Dev Assistant.*
+Historical notes and early drafts are kept under `Doc/archive/` for traceability. The README represents the curated portfolio-level project view.
+
+## Limitations
+
+This repository presents an undergraduate engineering prototype, not a product-grade UAV system. The project focuses on the robotic-arm electrical-control subsystem and final demo/testbench firmware.
+
+Out of scope for this repository:
+
+- UAV flight-control, attitude-control, or navigation closed loop.
+- Product-grade fault recovery and safety certification.
+- Full autonomous perception, planning, and end-to-end aerial grasping.
+- The final thesis document itself.
+
+## Credits
+
+This project builds on the STM32 ecosystem and several important open-source / vendor-provided components:
+
+- [FreeRTOS](https://www.freertos.org/) for real-time scheduling.
+- STMicroelectronics HAL and CMSIS packages for STM32F1 support.
+- [SimpleFOC](https://simplefoc.com/) and related community materials as references for BLDC / FOC learning.
+- DengFOC and community tutorials as helpful references during early motor-control bring-up.

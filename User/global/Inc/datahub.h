@@ -1,8 +1,8 @@
 /**
  * @file datahub.h
- * @brief Global Data Exchange Center (L4)
- * @note  Acts as the "Blackboard" for the Multi-Agent System.
- * All cross-task communication MUST go through this hub via thread-safe APIs.
+ * @brief Global Lock-Free Data Exchange Center & Type Definitions (L4)
+ * @note  Acts as the global blackboard for type definitions and the ONLY
+ * lock-free bridge between the 1000Hz Control Thread and 50Hz Logic Thread.
  */
 
 #ifndef DATAHUB_H
@@ -15,106 +15,90 @@
  * ========================================================= */
 
 /**
- * @brief System Operation Modes (Controlled by L5 Scheduler)
+ * @brief System Operation Modes
  */
 typedef enum {
-    ARA_MODE_INIT = 0,      // System booting and calibrating
-    ARA_MODE_IDLE,          // Safe state, actuators disabled, waiting for command
+    ARA_MODE_INIT = 0,      // System booting and calibrating FOC zero offset
+    ARA_MODE_IDLE,          // Safe state, actuators relaxed, waiting for command
     ARA_MODE_MANUAL,        // RC Direct Control (Operator)
-    ARA_MODE_AUTO,          // Autonomous Control (State Machine / Sensors)
-    ARA_MODE_ERROR          // Fault state (E-Stop, Link Loss, Overcurrent)
+    ARA_MODE_AUTO,          // Autonomous Control (Vision/State Machine)
+    ARA_MODE_ERROR          // Fault state (E-Stop, Link Loss, Sensor I2C Error)
 } AraSysMode_t;
 
-
 /* =========================================================
- * 2. RC Semantic Enums (Mapped from L3)
+ * 2. RC Semantic Enums & Intent Structure (Restored for L3)
  * ========================================================= */
 
-/**
- * @brief Arm Action Commands (From SE Channel)
- */
 typedef enum {
     ARM_CMD_HOLD = 0,       // Stop movement / Maintain current position
-    ARM_CMD_EXTEND,         // Continuous extension (Long Press)
-    ARM_CMD_RETRACT         // Pulse retraction command (Short Press)
+    ARM_CMD_EXTEND,         // Continuous extension
+    ARM_CMD_RETRACT         // Pulse retraction command
 } AraArmCmd_t;
 
-/**
- * @brief Gripper Action Commands (From SC Channel)
- */
 typedef enum {
     GRIPPER_CMD_STOP = 0,   // Abort action / Hold
     GRIPPER_CMD_OPEN,       // Open gripper
     GRIPPER_CMD_CLOSE       // Close gripper
 } AraGripperCmd_t;
 
-/**
- * @brief Emergency Stop State (From SD Channel)
- */
 typedef enum {
     ESTOP_RELEASED = 0,     // Safe to operate
     ESTOP_ACTIVE            // CRITICAL: Stop all actuators
 } AraEStopState_t;
 
-
-/* =========================================================
- * 3. Data Structures
- * ========================================================= */
-
 /**
- * @brief RC Extracted Intent Data (Written by Task_RC, Read by Scheduler/Motion)
+ * @brief RC Extracted Intent Data
+ * @note  Used as a local passing structure in the 50Hz Logic Thread.
  */
 typedef struct {
-    bool            is_link_up;      // true = Connected, false = Link Loss (Triggers ERROR)
-
-    AraSysMode_t    req_mode;        // Requested mode from SA (Manual vs Auto)
-    AraEStopState_t estop_state;     // E-Stop status from SD
-
-    AraArmCmd_t     arm_cmd;         // Main Arm command from SE
-    AraGripperCmd_t gripper_cmd;     // Gripper command from SC
-    bool            sys_reset_pulse; // System Reset pulse from SB (true for 1 cycle only)
-
-    uint16_t        aux_knob_val;    // SF Knob mapping: 0 to 1000 (Permille, NO FLOAT)
+    bool            is_link_up;      // true = Connected, false = Link Loss
+    AraSysMode_t    req_mode;        // Requested mode from RC
+    AraEStopState_t estop_state;     // E-Stop status
+    AraArmCmd_t     arm_cmd;         // Main Arm command
+    AraGripperCmd_t gripper_cmd;     // Gripper command
+    bool            sys_reset_pulse; // System Reset pulse
+    uint16_t        aux_knob_val;    // Aux Knob mapping: 0 to 1000
 } RcControlData_t;
 
 
 /* =========================================================
- * 4. Thread-Safe API
- * @note Implementations in .c MUST use FreeRTOS Mutex or
- * taskENTER_CRITICAL() / taskEXIT_CRITICAL() to prevent data tearing.
+ * 3. Cross-Thread Data Structures (The Physical Hub)
  * ========================================================= */
 
 /**
- * @brief Initialize DataHub (Create Mutexes/Queues)
- * @note  Must be called before OS Scheduler starts.
+ * @brief Downlink Command Struct (50Hz Logic -> 1000Hz Motion)
  */
+typedef struct {
+    AraSysMode_t    sys_mode;           // Master mode overriding all behaviors
+    bool            emergency_stop;     // Critical flag: true = instantly disable BLDC
+    uint16_t        target_foc_angle;   // Target absolute AS5600 angle (0-4095)
+} DataHub_Cmd_t;
+
+/**
+ * @brief Uplink State Struct (1000Hz Motion -> 50Hz Logic)
+ */
+/**
+ * @brief Uplink State Struct (1000Hz Motion -> 50Hz Logic)
+ */
+typedef struct {
+    uint16_t        current_foc_angle;  /**< Real-time AS5600 angle (0-4095). */
+    int16_t         current_velocity;   /**< Real-time calculated velocity (counts/ms). */
+    AraStatus_t     foc_status;         /**< Hardware / motion health state. */
+    bool            motion_ready;       /**< true when Motion finished calibration and is ready for control. */
+} DataHub_State_t;
+
+
+/* =========================================================
+ * 4. Thread-Safe API (Lock-Free)
+ * @note Protected by taskENTER_CRITICAL(). Execution < 5us.
+ * ========================================================= */
+
 void DataHub_Init(void);
 
-/**
- * @brief Read the current System Operation Mode
- * @return AraSysMode_t current mode
- */
-AraSysMode_t DataHub_GetSysMode(void);
+void DataHub_WriteCmd(const DataHub_Cmd_t *p_cmd);
+void DataHub_ReadCmd(DataHub_Cmd_t *p_cmd);
 
-/**
- * @brief Force set the System Operation Mode (Used by L5 Scheduler only)
- * @param mode Target mode
- * @return ARA_OK on success
- */
-AraStatus_t DataHub_SetSysMode(AraSysMode_t mode);
-
-/**
- * @brief Write the latest parsed RC Semantic Data
- * @param p_rc_data Pointer to the source data
- * @return ARA_OK or ARA_BUSY (if Mutex timeout)
- */
-AraStatus_t DataHub_WriteRcData(const RcControlData_t *p_rc_data);
-
-/**
- * @brief Read the latest RC Semantic Data
- * @param p_rc_data Pointer to the destination buffer
- * @return ARA_OK or ARA_BUSY (if Mutex timeout)
- */
-AraStatus_t DataHub_ReadRcData(RcControlData_t *p_rc_data);
+void DataHub_WriteState(const DataHub_State_t *p_state);
+void DataHub_ReadState(DataHub_State_t *p_state);
 
 #endif /* DATAHUB_H */

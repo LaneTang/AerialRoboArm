@@ -31,7 +31,8 @@
 #include "bsp_gpio.h"
 #include "bsp_i2c.h"
 #include "bsp_pwm.h"
-#include "app_scheduler.h"
+#include "app_threads.h"
+#include "app_testbench.h"
 
 /* USER CODE END Includes */
 
@@ -108,9 +109,9 @@ int main(void)
     BSP_PWM_Init();
     BSP_I2C_Init();
 
-//    App_Scheduler_Init();
+//    App_Threads_Init();
+    App_Testbench_Init();
 
-// --- 插入这段测试代码 ---
   /* USER CODE END 2 */
 
   /* Init scheduler */

@@ -27,7 +27,6 @@
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
 #include "bsp_uart.h"
-#include "app_scheduler.h" // [添加]
 #include "task_motion.h"   // [添加]
 #include "test_rc_console.h"
 #include <math.h> // 用于测试浮点打印
@@ -59,20 +58,6 @@ const osThreadAttr_t defaultTask_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
-/* Definitions for vLogTask */
-osThreadId_t vLogTaskHandle;
-const osThreadAttr_t vLogTask_attributes = {
-  .name = "vLogTask",
-  .stack_size = 512 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
-/* Definitions for vMotorTask */
-osThreadId_t vMotorTaskHandle;
-const osThreadAttr_t vMotorTask_attributes = {
-  .name = "vMotorTask",
-  .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityHigh,
-};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -80,8 +65,6 @@ const osThreadAttr_t vMotorTask_attributes = {
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
-void LogTask(void *argument);
-void MotorTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -115,12 +98,6 @@ void MX_FREERTOS_Init(void) {
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
-  /* creation of vLogTask */
-  vLogTaskHandle = osThreadNew(LogTask, NULL, &vLogTask_attributes);
-
-  /* creation of vMotorTask */
-  vMotorTaskHandle = osThreadNew(MotorTask, NULL, &vMotorTask_attributes);
-
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -152,61 +129,6 @@ void StartDefaultTask(void *argument)
       osDelay(1);
   }
   /* USER CODE END StartDefaultTask */
-}
-
-/* USER CODE BEGIN Header_LogTask */
-/**
-* @brief Function implementing the vLogTask thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_LogTask */
-void LogTask(void *argument)
-{
-  /* USER CODE BEGIN LogTask */
-//    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
-//    TestConsole_Init();
-    TestRcConsole_Init();
-
-
-    /* Infinite loop */
-    for(;;)
-    {
-        // 示例：打印当前系统状态
-//        TestConsole_TaskLoop();
-        TestRcConsole_TaskLoop();
-
-
-        osDelay(20);
-    }
-  /* USER CODE END LogTask */
-}
-
-/* USER CODE BEGIN Header_MotorTask */
-/**
-* @brief Function implementing the vMotorTask thread.
-* @param argument: Not used
-* @retval None
-*/
-
-
-/* USER CODE END Header_MotorTask */
-void MotorTask(void *argument)
-{
-  /* USER CODE BEGIN MotorTask */
-  BSP_UART_Printf("[MotorTask] Started\r\n");
-
-  TaskMotion_Init();
-  BSP_UART_Printf("[MotorTask] Init done\r\n");
-
-  TaskMotion_Entry(argument);
-
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END MotorTask */
 }
 
 /* Private application code --------------------------------------------------*/

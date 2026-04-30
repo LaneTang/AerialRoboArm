@@ -1,119 +1,236 @@
 /**
  * @file task_rc.c
- * @brief RC Data Collection and Semantic Dispatch Task (L4) Implementation
- * @note  FreeRTOS Task. Integrates DRV_ELRS (L2) and MOD_RC_SEMANTIC (L3).
+ * @brief RC Data Collection & Semantic Logic Runnable (L4) Implementation
+ * @note  Strictly C99. Zero RTOS dependencies.
+ *        This runnable orchestrates:
+ *        - L2 ELRS protocol driver update
+ *        - L3 semantic / debug RC mapping
+ *        - Link-loss failsafe output
  */
 
 #include "task_rc.h"
-#include "FreeRTOS.h"
-#include "task.h"
+#include "bsp_uart.h"
 #include <string.h>
 
 /* =========================================================
- * Internal Context Instance
- * ========================================================= */
-/* Static allocation to avoid dynamic memory (malloc) after initialization */
-static TaskRc_Context_t rc_ctx;
-
-/* =========================================================
- * Internal Helper Functions
+ * 1. Internal Context Allocation
  * ========================================================= */
 
 /**
- * @brief Helper to generate a safe default channel array for initialization
+ * @brief Singleton context for RC task.
  */
-static void generate_default_channels(uint16_t *channels)
+static TaskRc_Context_t s_rc_ctx;
+
+/* =========================================================
+ * 2. Private Helper Functions
+ * ========================================================= */
+
+/**
+ * @brief  Generate a safe default raw-channel snapshot for initialization.
+ * @param  p_channels Output channel array.
+ * @note   Sticks default to MID. E-stop channel defaults to ACTIVE.
+ */
+static void TaskRc_GenerateDefaultChannels(uint16_t *p_channels)
 {
-    for (int i = 0; i < DRV_ELRS_MAX_CHANNELS; i++) {
-        channels[i] = MOD_RC_VAL_MID; // 992 (Neutral position)
+    uint8_t i;
+
+    if (p_channels == NULL) {
+        return;
     }
-    /* E-Stop Channel (SD): Default to UP (Low value) -> ACTIVE for safety */
-    channels[MOD_RC_IDX_SD] = MOD_RC_SW_LOW - 100;
+
+    for (i = 0U; i < DRV_ELRS_MAX_CHANNELS; i++) {
+        p_channels[i] = MOD_RC_VAL_MID;
+    }
+
+    /* CH10 / SD: default to ACTIVE for safety. */
+    p_channels[MOD_RC_IDX_SD] = (uint16_t)(MOD_RC_SW_LOW - 100U);
 }
 
 /**
- * @brief Helper to apply Failsafe values when link is lost
+ * @brief  Apply safe formal failsafe intent.
+ * @param  p_out_intent Output semantic intent.
  */
-static void apply_failsafe_intent(RcControlData_t *intent)
+static void TaskRc_ApplyFailsafeIntent(RcControlData_t *p_out_intent)
 {
-    intent->is_link_up      = false;
-    intent->req_mode        = ARA_MODE_IDLE;      // Force system out of Auto/Manual
-    intent->estop_state     = ESTOP_ACTIVE;       // CRITICAL: Lock all actuators
-    intent->arm_cmd         = ARM_CMD_HOLD;       // Stop arm movement
-    intent->gripper_cmd     = GRIPPER_CMD_STOP;   // Stop gripper
-    intent->sys_reset_pulse = false;
-    intent->aux_knob_val    = 0;
+    if (p_out_intent == NULL) {
+        return;
+    }
+
+    memset(p_out_intent, 0, sizeof(RcControlData_t));
+
+    p_out_intent->is_link_up      = false;
+    p_out_intent->req_mode        = ARA_MODE_IDLE;
+    p_out_intent->estop_state     = ESTOP_ACTIVE;
+    p_out_intent->arm_cmd         = ARM_CMD_HOLD;
+    p_out_intent->gripper_cmd     = GRIPPER_CMD_STOP;
+    p_out_intent->sys_reset_pulse = false;
+    p_out_intent->aux_knob_val    = 0U;
 }
 
+/**
+ * @brief  Apply safe debug failsafe output.
+ * @param  p_out_debug Output debug RC data.
+ */
+static void TaskRc_ApplyFailsafeDebug(RcDebugAnalogData_t *p_out_debug)
+{
+    if (p_out_debug == NULL) {
+        return;
+    }
+
+    memset(p_out_debug, 0, sizeof(RcDebugAnalogData_t));
+
+    p_out_debug->is_link_up       = false;
+    p_out_debug->req_mode         = (uint8_t)ARA_MODE_IDLE;
+    p_out_debug->estop_state      = (uint8_t)ESTOP_ACTIVE;
+    p_out_debug->ch1_percent      = 0;
+    p_out_debug->aux_knob_val     = 0U;
+    p_out_debug->sys_reset_pulse  = false;
+}
+
+/**
+ * @brief  Refresh ELRS parser and fetch a safe channel snapshot.
+ * @param  current_tick_ms Current system tick in milliseconds.
+ * @param  p_out_channels Output channel array.
+ * @return ARA_OK on success, otherwise driver / link error code.
+ * @note   CRC errors are treated as non-fatal when link is still up and a valid
+ *         previous channel snapshot exists.
+ */
+static AraStatus_t TaskRc_RefreshAndCopyChannels(uint32_t current_tick_ms,
+                                                 uint16_t *p_out_channels)
+{
+    AraStatus_t drv_status;
+    AraStatus_t copy_status;
+
+    if (p_out_channels == NULL) {
+        return ARA_ERR_PARAM;
+    }
+
+    drv_status = DrvElrs_Update(&s_rc_ctx.elrs_driver, current_tick_ms);
+
+    if (!DrvElrs_IsLinkUp(&s_rc_ctx.elrs_driver)) {
+        return ARA_ERR_DISCONNECTED;
+    }
+
+    copy_status = DrvElrs_CopyChannels(&s_rc_ctx.elrs_driver,
+                                       p_out_channels,
+                                       DRV_ELRS_MAX_CHANNELS);
+    if (copy_status != ARA_OK) {
+        return copy_status;
+    }
+
+    /* CRC errors are non-fatal if link remains up and snapshot copy succeeded. */
+    if ((drv_status != ARA_OK) && (drv_status != ARA_ERR_CRC)) {
+        return drv_status;
+    }
+
+    return ARA_OK;
+}
 
 /* =========================================================
- * API Implementation
+ * 3. Public API Implementation
  * ========================================================= */
 
 void TaskRc_Init(void)
 {
-    /* Clear context memory */
-    memset(&rc_ctx, 0, sizeof(TaskRc_Context_t));
-
-    /* 1. Initialize L2 Driver (Bind to ELRS UART) */
-    AraStatus_t l2_status = DrvElrs_Init(&rc_ctx.elrs_driver, BSP_UART_ELRS);
-
-    /* 2. Initialize L3 Semantic Logic */
+    AraStatus_t l2_status;
+    AraStatus_t l3_status;
     uint16_t default_chs[DRV_ELRS_MAX_CHANNELS];
-    generate_default_channels(default_chs);
-    AraStatus_t l3_status = ModRcSemantic_Init(&rc_ctx.semantic_logic, default_chs);
 
-    /* Mark as initialized only if both components are OK */
-    if (l2_status == ARA_OK && l3_status == ARA_OK) {
-        rc_ctx.is_initialized = true;
+    memset(&s_rc_ctx, 0, sizeof(TaskRc_Context_t));
+
+    l2_status = DrvElrs_Init(&s_rc_ctx.elrs_driver, BSP_UART_ELRS);
+
+    TaskRc_GenerateDefaultChannels(default_chs);
+    l3_status = ModRcSemantic_Init(&s_rc_ctx.semantic_logic, default_chs);
+
+    if ((l2_status == ARA_OK) && (l3_status == ARA_OK)) {
+        s_rc_ctx.is_initialized = true;
     }
 }
 
-void TaskRc_Entry(void *argument)
+void TaskRc_Update(uint32_t current_tick_ms, RcControlData_t *p_out_intent)
 {
-    /* Prevent running if not properly initialized */
-    if (!rc_ctx.is_initialized) {
-        vTaskDelete(NULL);
+    AraStatus_t status;
+    uint16_t channels[DRV_ELRS_MAX_CHANNELS];
+
+    if (p_out_intent == NULL) {
+        return;
     }
 
-    /* FreeRTOS Absolute Delay Setup */
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(TASK_RC_PERIOD_MS);
-
-    /* Task Main Loop */
-    for (;;)
-    {
-        /* 1. Wait for the next cycle (e.g., 20ms = 50Hz) */
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
-
-        /* 2. Get current system time in ms */
-        /* Assuming configTICK_RATE_HZ == 1000, TickCount is exactly ms */
-        uint32_t current_tick_ms = (uint32_t)xTaskGetTickCount();
-
-        /* 3. Update L2 Driver (Reads UART RingBuffer, Checks CRC & Timeout) */
-        DrvElrs_Update(&rc_ctx.elrs_driver, current_tick_ms);
-
-        /* 4. Check Link Status & Process Semantics */
-        bool link_is_up = DrvElrs_IsLinkUp(&rc_ctx.elrs_driver);
-
-        /* Start with a clean slate for the new intent */
-        memset(&rc_ctx.last_intent, 0, sizeof(RcControlData_t));
-
-        if (link_is_up) {
-            /* Link is healthy: Translate raw channels to Semantic Intents via L3 */
-            ModRcSemantic_Process(&rc_ctx.semantic_logic,
-                                  rc_ctx.elrs_driver.channels,
-                                  current_tick_ms,
-                                  &rc_ctx.last_intent);
-
-            rc_ctx.last_intent.is_link_up = true;
-        } else {
-            /* Link is lost: Enforce hardware failsafe semantics */
-            apply_failsafe_intent(&rc_ctx.last_intent);
-        }
-
-        /* 5. Publish Intent to Global DataHub */
-        /* L5 Scheduler and TaskMotion will read this in their own cycles */
-        DataHub_WriteRcData(&rc_ctx.last_intent);
+    if (!s_rc_ctx.is_initialized) {
+        TaskRc_ApplyFailsafeIntent(p_out_intent);
+        return;
     }
+
+    status = TaskRc_RefreshAndCopyChannels(current_tick_ms, channels);
+    if (status != ARA_OK) {
+        TaskRc_ApplyFailsafeIntent(p_out_intent);
+        return;
+    }
+
+    memset(p_out_intent, 0, sizeof(RcControlData_t));
+
+    status = ModRcSemantic_Process(&s_rc_ctx.semantic_logic,
+                                   channels,
+                                   current_tick_ms,
+                                   p_out_intent);
+    if (status != ARA_OK) {
+        TaskRc_ApplyFailsafeIntent(p_out_intent);
+        return;
+    }
+
+    p_out_intent->is_link_up = true;
+}
+
+void TaskRc_UpdateDebugAnalog(uint32_t current_tick_ms,
+                              RcDebugAnalogData_t *p_out_debug)
+{
+    AraStatus_t status;
+    uint16_t channels[DRV_ELRS_MAX_CHANNELS];
+
+    if (p_out_debug == NULL) {
+        return;
+    }
+
+    if (!s_rc_ctx.is_initialized) {
+        TaskRc_ApplyFailsafeDebug(p_out_debug);
+        return;
+    }
+
+    status = TaskRc_RefreshAndCopyChannels(current_tick_ms, channels);
+    if (status != ARA_OK) {
+        TaskRc_ApplyFailsafeDebug(p_out_debug);
+        return;
+    }
+
+    memset(p_out_debug, 0, sizeof(RcDebugAnalogData_t));
+
+    status = ModRcSemantic_ProcessDebugAnalog(&s_rc_ctx.semantic_logic,
+                                              channels,
+                                              current_tick_ms,
+                                              p_out_debug);
+    if (status != ARA_OK) {
+        TaskRc_ApplyFailsafeDebug(p_out_debug);
+        return;
+    }
+
+    p_out_debug->is_link_up = true;
+}
+
+bool TaskRc_IsInitialized(void)
+{
+    return s_rc_ctx.is_initialized;
+}
+
+AraStatus_t TaskRc_CopyRawChannels(uint16_t *p_out_channels, uint8_t out_count)
+{
+    if ((p_out_channels == NULL) || (out_count < DRV_ELRS_MAX_CHANNELS)) {
+        return ARA_ERR_PARAM;
+    }
+
+    if (!s_rc_ctx.is_initialized) {
+        return ARA_ERR_DISCONNECTED;
+    }
+
+    return DrvElrs_CopyChannels(&s_rc_ctx.elrs_driver, p_out_channels, out_count);
 }
