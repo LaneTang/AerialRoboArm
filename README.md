@@ -70,19 +70,26 @@ The following media files are used as the repository's visual evidence of the fi
 | [Full system overview](./Figures/DEMO/整机系统全览图.jpg) | Physical view of the integrated prototype. |
 | [Electrical-control prototype platform](./Figures/DEMO/电控系统原型控制平台.jpg) | STM32-based control platform and wiring context. |
 | [Encoder and joint motor installation](./Figures/DEMO/编码器与关节电机安装实物图.jpg) | AS5600 encoder and BLDC joint installation. |
-| [Closed-loop folding-arm demo video](./Figures/DEMO/实机闭环控制折叠臂模拟动作演示.mp4) | Physical closed-loop motion demonstration. |
-| [ELRS manual closed-loop control demo video](./Figures/DEMO/基于%20ELRS%20遥控器的手动闭环控制演示.mp4) | Manual closed-loop operation through ELRS remote input. |
+
+**Closed-loop folding-arm demo**
+
+![Closed-loop folding-arm physical demo](./Figures/DEMO/实机闭环控制折叠臂模拟动作演示.gif)
+
+**ELRS manual closed-loop control demo**
+
+![ELRS manual closed-loop control demo](./Figures/DEMO/基于%20ELRS%20遥控器的手动闭环控制演示.gif)
 
 ## Final Demo Scope
 
-The current `demo_v6` firmware is a finalized on-board testbench/demo version. It validates the electrical-control chain used by the project:
+The current `demo_v6` firmware is a finalized on-board testbench/demo version. It validates the electrical-control chain shown in the GIF demos:
 
 - BLDC motor electrical alignment.
 - Motor open-loop voltage-vector test.
-- Motor closed-loop position-control test.
+- 1 kHz single-axis closed-loop position control.
 - AS5600 encoder feedback and continuous `ext_raw` position tracking.
+- BLDC voltage-FOC / SVPWM output through the power stage.
 - ELRS remote-input decoding and semantic mapping.
-- MANUAL bridge from RC input to motor target.
+- MANUAL bridge from RC input to the motor target.
 - AUTO step test for staged closed-loop response recording.
 - Serial console menu, snapshot logs, and compact telemetry output.
 
@@ -90,10 +97,12 @@ The active firmware entry in `Core/Src/main.c` calls `App_Testbench_Init()`, whi
 
 ## System Architecture
 
-The firmware is organized as a layered embedded system. The design separates chip-level hardware access, device drivers, reusable modules, task-level runnables, and the application/testbench container.
+The firmware is organized as a layered embedded system rather than a flat demo program. The design separates chip-level hardware access, device drivers, reusable control modules, task-level runnables, and the application/testbench container.
+
+**Software layering**
 
 <p align="center">
-  <img src="Figures/DEMO/软件架构图.png" width="82%" alt="AerialRoboArm software architecture" />
+  <img src="Figures/DEMO/电控系统软件分层架构-en.png" width="86%" alt="AerialRoboArm electrical-control software layering architecture" />
 </p>
 
 | Layer | Responsibility | Main Directory |
@@ -104,13 +113,20 @@ The firmware is organized as a layered embedded system. The design separates chi
 | L2 Driver | Device-level hardware drivers | `User/drv` |
 | L1 BSP | STM32 peripheral abstraction | `User/bsp` |
 
-The final demo runtime follows a dual-rate structure:
+**Dual-thread runtime scheduling**
 
-- A 1 kHz high-frequency control thread for motor feedback, control computation, FOC output, and PWM update.
-- A 50 Hz low-frequency logic thread for console input, RC processing, demo state transitions, logging, and testbench orchestration.
+The final demo runtime follows a dual-rate FreeRTOS structure. A 1 kHz high-frequency control thread handles motor feedback, control computation, FOC output, and PWM update, while a 50 Hz low-frequency logic thread handles console input, RC processing, demo state transitions, logging, and testbench orchestration. `DataHub` decouples command/state exchange between the two timing domains.
 
 <p align="center">
-  <img src="Figures/DEMO/单轴运动控制测试流程图.png" width="78%" alt="Single-axis motion-control test workflow" />
+  <img src="Figures/DEMO/电控系统双线程并行调度架构-en.png" width="86%" alt="AerialRoboArm dual-thread parallel scheduling architecture" />
+</p>
+
+**Single-axis closed-loop control**
+
+The main folding-arm axis is presented as a position-control loop: target position, fixed-point discrete PID, voltage-FOC / SVPWM output, three-phase power-stage drive, BLDC joint motion, and AS5600 position feedback.
+
+<p align="center">
+  <img src="Figures/DEMO/单轴位置闭环控制框图-en.png" width="86%" alt="AerialRoboArm single-axis closed-loop position-control block diagram" />
 </p>
 
 ## Hardware Platform

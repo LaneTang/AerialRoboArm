@@ -70,19 +70,26 @@ AerialRoboArm 是一套面向无人机挂载场景的轻量型可折叠机械臂
 | [整机系统全览图](./Figures/DEMO/整机系统全览图.jpg) | 集成样机的实物整体视图。 |
 | [电控系统原型控制平台](./Figures/DEMO/电控系统原型控制平台.jpg) | STM32 电控平台与接线环境。 |
 | [编码器与关节电机安装实物图](./Figures/DEMO/编码器与关节电机安装实物图.jpg) | AS5600 编码器与 BLDC 关节电机安装方式。 |
-| [实机闭环控制折叠臂模拟动作演示](./Figures/DEMO/实机闭环控制折叠臂模拟动作演示.mp4) | 实机闭环运动演示。 |
-| [基于 ELRS 遥控器的手动闭环控制演示](./Figures/DEMO/基于%20ELRS%20遥控器的手动闭环控制演示.mp4) | 基于 ELRS 遥控输入的手动闭环控制演示。 |
+
+**实机闭环折叠臂演示**
+
+![实机闭环折叠臂演示](./Figures/DEMO/实机闭环控制折叠臂模拟动作演示.gif)
+
+**基于 ELRS 遥控器的手动闭环控制演示**
+
+![基于 ELRS 遥控器的手动闭环控制演示](./Figures/DEMO/基于%20ELRS%20遥控器的手动闭环控制演示.gif)
 
 ## 最终演示范围
 
-当前 `demo_v6` 固件是定稿的板载 testbench/demo 版本。它验证了项目使用的电控主链路：
+当前 `demo_v6` 固件是定稿的板载 testbench/demo 版本。它验证了 GIF 演示中呈现的电控主链路：
 
 - BLDC 电机电角对齐。
 - 电机开环电压矢量测试。
-- 电机闭环位置控制测试。
+- 1 kHz 单轴闭环位置控制。
 - AS5600 编码器反馈与连续 `ext_raw` 位置跟踪。
+- BLDC 电压 FOC / SVPWM 输出与功率级驱动。
 - ELRS 遥控输入解析与语义映射。
-- 从 RC 输入到电机目标的 MANUAL 控制桥接。
+- 从 RC 输入到电机目标值的 MANUAL 控制桥接。
 - 用于分阶段闭环响应记录的 AUTO 阶跃测试。
 - 串口控制台菜单、状态快照日志与紧凑遥测输出。
 
@@ -90,10 +97,12 @@ AerialRoboArm 是一套面向无人机挂载场景的轻量型可折叠机械臂
 
 ## 系统架构
 
-固件被组织为分层嵌入式系统。该设计将芯片级硬件访问、设备驱动、可复用模块、任务级 runnable 与应用/testbench 容器分离。
+固件被组织为分层嵌入式系统，而不是散装 demo 程序。该设计将芯片级硬件访问、设备驱动、可复用控制模块、任务级 runnable 与应用/testbench 容器分离。
+
+**软件分层**
 
 <p align="center">
-  <img src="Figures/DEMO/软件架构图.png" width="82%" alt="AerialRoboArm 软件架构图" />
+  <img src="Figures/DEMO/电控系统软件分层架构-zh.png" width="86%" alt="AerialRoboArm 电控系统软件分层架构" />
 </p>
 
 | 层级 | 职责 | 主要目录 |
@@ -104,13 +113,20 @@ AerialRoboArm 是一套面向无人机挂载场景的轻量型可折叠机械臂
 | L2 Driver | 设备级硬件驱动 | `User/drv` |
 | L1 BSP | STM32 外设抽象 | `User/bsp` |
 
-最终 demo 运行时采用双频结构：
+**双线程运行时调度**
 
-- 1 kHz 高频控制线程，用于电机反馈、控制计算、FOC 输出与 PWM 更新。
-- 50 Hz 低频逻辑线程，用于控制台输入、RC 处理、demo 状态转移、日志输出与 testbench 编排。
+最终 demo 运行时采用双频 FreeRTOS 结构。1 kHz 高频控制线程负责电机反馈、控制计算、FOC 输出与 PWM 更新；50 Hz 低频逻辑线程负责控制台输入、RC 处理、demo 状态转移、日志输出与 testbench 编排。`DataHub` 用于解耦两个时序域之间的命令与状态交换。
 
 <p align="center">
-  <img src="Figures/DEMO/单轴运动控制测试流程图.png" width="78%" alt="单轴运动控制测试流程图" />
+  <img src="Figures/DEMO/电控系统双线程并行调度架构-zh.png" width="86%" alt="AerialRoboArm 电控系统双线程并行调度架构" />
+</p>
+
+**单轴位置闭环控制**
+
+折叠臂主轴被组织为一条位置闭环控制链路：目标位置、定点离散 PID、电压 FOC / SVPWM 输出、三相功率级驱动、BLDC 关节运动，以及 AS5600 位置反馈。
+
+<p align="center">
+  <img src="Figures/DEMO/单轴位置闭环控制框图-zh.png" width="86%" alt="AerialRoboArm 单轴位置闭环控制框图" />
 </p>
 
 ## 硬件平台
