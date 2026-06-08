@@ -45,11 +45,16 @@ int8_t DrvServo_SetAngle(DrvServo_Context_t *ctx, uint8_t target_angle)
         status = DRV_SERVO_LIMIT_REACHED;
     }
 
-    // 2. 纯整型算力优化：映射公式 Pulse = 500 + (Angle * 2000 / 180)
-    // 化简为：Pulse = 500 + ((Angle * 100) / 9)
-    // 精度分析：Target_angle最大180。180*100 = 18000。
-    // 18000 远小于 uint16_t 的最大值 65535，绝对不会溢出。
-    uint16_t pulse_us = 500 + (((uint16_t)target_angle * 100) / 9);
+    // 2. Piecewise linear mapping for PTK 7462W (mid = 1520us):
+    //    0°→500us, 90°→1520us, 180°→2500us
+    //    Lower half: Pulse = 500 + (angle * 1020 / 90) = 500 + (angle * 34 / 3)
+    //    Upper half: Pulse = 1520 + ((angle-90) * 980 / 90) = 1520 + ((angle-90) * 98 / 9)
+    uint16_t pulse_us;
+    if (target_angle <= 90U) {
+        pulse_us = 500U + ((uint16_t)target_angle * 34U / 3U);
+    } else {
+        pulse_us = 1520U + ((uint16_t)(target_angle - 90U) * 98U / 9U);
+    }
 
     // 3. 调用 L1 BSP 接口直接更新寄存器
     BSP_PWM_SetServoPulse(ctx->servo_id, pulse_us);

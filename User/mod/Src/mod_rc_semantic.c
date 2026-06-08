@@ -139,6 +139,20 @@ static uint8_t map_analog_degree(uint16_t ch_val)
     return (uint8_t)((value * 180U) / range);
 }
 
+/**
+ * @brief  Map an analog channel to degree, snapping near-center to 90 deg.
+ *         Use for spring-centered sticks that exhibit ADC jitter when idle.
+ */
+static uint8_t map_analog_degree_centered(uint16_t ch_val, uint16_t deadband_raw)
+{
+    int32_t delta = (int32_t)ch_val - (int32_t)MOD_RC_VAL_MID;
+    if (delta < 0) delta = -delta;
+    if (delta < (int32_t)deadband_raw) {
+        return 90U;
+    }
+    return map_analog_degree(ch_val);
+}
+
 /* =========================================================
  * API Implementation
  * ========================================================= */
@@ -155,7 +169,18 @@ AraStatus_t ModRcSemantic_Init(ModRcSemantic_Context_t *p_ctx,
     p_ctx->sb_pulse_start_ms = 0U;
     p_ctx->sb_pulse_active = false;
 
+    p_ctx->inc_target_deg   = 0;
+    p_ctx->inc_last_step_ms = 0U;
+
     return ARA_OK;
+}
+
+void ModRcSemantic_ReseedIncremental(ModRcSemantic_Context_t *p_ctx,
+                                     int16_t current_deg)
+{
+    if (p_ctx == NULL) return;
+    p_ctx->inc_target_deg   = current_deg;
+    p_ctx->inc_last_step_ms = 0U;
 }
 
 AraStatus_t ModRcSemantic_Process(ModRcSemantic_Context_t *p_ctx,
@@ -201,13 +226,42 @@ AraStatus_t ModRcSemantic_Process(ModRcSemantic_Context_t *p_ctx,
     /* SF: Aux knob */
     out_data->aux_knob_val = map_analog_permille(channels[MOD_RC_IDX_SF]);
 
+    /* Continuous analog semantics consumed by demo_v7 Arbiter. */
+    ch1_pct = map_ch1_percent((int16_t)channels[MOD_RC_IDX_CH1]);
+    out_data->ch1_percent = ch1_pct;
+    out_data->roll_degree = map_analog_degree(channels[MOD_RC_IDX_SF]);
+    out_data->gripper_angle = map_analog_degree_centered(channels[MOD_RC_IDX_CH4],
+                                                          MOD_RC_CH4_CENTER_DEADBAND_RAW);
+
+    /* ---------------- CH1 incremental stepping ---------------- */
+    {
+        int16_t abs_pct = (ch1_pct >= 0) ? ch1_pct : (int16_t)(-ch1_pct);
+
+        if ((out_data->req_mode == ARA_MODE_MANUAL) &&
+            (out_data->estop_state == ESTOP_RELEASED) &&
+            (abs_pct > MOD_RC_CH1_DEADBAND_PCT)) {
+            if ((uint32_t)(current_tick_ms - p_ctx->inc_last_step_ms) >= MOD_RC_CH1_STEP_INTERVAL_MS) {
+                int32_t deg = (int32_t)p_ctx->inc_target_deg;
+                if (ch1_pct > 0) {
+                    deg += (int32_t)MOD_RC_CH1_STEP_DEG;
+                } else {
+                    deg -= (int32_t)MOD_RC_CH1_STEP_DEG;
+                }
+                if (deg > 180) deg = 180;
+                if (deg < -180) deg = -180;
+                p_ctx->inc_target_deg = (int16_t)deg;
+                p_ctx->inc_last_step_ms = current_tick_ms;
+            }
+        }
+    }
+    out_data->incremental_angle_deg = p_ctx->inc_target_deg;
+
     /* ---------------- CH1 arm semantics with hysteresis ---------------- */
     out_data->arm_cmd = ARM_CMD_HOLD;
 
     if ((out_data->req_mode == ARA_MODE_MANUAL) &&
         (out_data->estop_state == ESTOP_RELEASED))
     {
-        ch1_pct = map_ch1_percent((int16_t)channels[MOD_RC_IDX_CH1]);
         abs_pct = (ch1_pct >= 0) ? ch1_pct : (int16_t)(-ch1_pct);
 
         switch (p_ctx->arm_last_cmd) {
@@ -268,11 +322,35 @@ AraStatus_t ModRcSemantic_ProcessDebugAnalog(ModRcSemantic_Context_t *p_ctx,
     out_data->ch1_percent = map_ch1_percent((int16_t)channels[MOD_RC_IDX_CH1]);
     out_data->aux_knob_val = map_analog_permille(channels[MOD_RC_IDX_SF]);
 
+    /* ---------------- CH1 incremental stepping ---------------- */
+    {
+        int16_t ch1_pct = out_data->ch1_percent;
+        int16_t abs_pct = (ch1_pct >= 0) ? ch1_pct : (int16_t)(-ch1_pct);
+
+        if ((out_data->req_mode == (uint8_t)ARA_MODE_MANUAL) &&
+            (out_data->estop_state == (uint8_t)ESTOP_RELEASED) &&
+            (abs_pct > MOD_RC_CH1_DEADBAND_PCT)) {
+            if ((uint32_t)(current_tick_ms - p_ctx->inc_last_step_ms) >= MOD_RC_CH1_STEP_INTERVAL_MS) {
+                int32_t deg = (int32_t)p_ctx->inc_target_deg;
+                if (ch1_pct > 0) {
+                    deg += (int32_t)MOD_RC_CH1_STEP_DEG;
+                } else {
+                    deg -= (int32_t)MOD_RC_CH1_STEP_DEG;
+                }
+                if (deg > 180) deg = 180;
+                if (deg < -180) deg = -180;
+                p_ctx->inc_target_deg = (int16_t)deg;
+                p_ctx->inc_last_step_ms = current_tick_ms;
+            }
+        }
+    }
+
     sb_now = map_3pos(channels[MOD_RC_IDX_SB]);
     out_data->sys_reset_pulse = update_sb_reset_pulse(p_ctx, sb_now, current_tick_ms);
 
-    out_data->roll_angle = map_analog_degree(channels[MOD_RC_IDX_CH3]);
-    out_data->gripper_angle = map_analog_degree(channels[MOD_RC_IDX_SF]); // CH8 就是 SF
+    out_data->roll_angle = map_analog_degree(channels[MOD_RC_IDX_SF]);
+    out_data->gripper_angle = map_analog_degree_centered(channels[MOD_RC_IDX_CH4],
+                                                          MOD_RC_CH4_CENTER_DEADBAND_RAW);
 
     return ARA_OK;
 }

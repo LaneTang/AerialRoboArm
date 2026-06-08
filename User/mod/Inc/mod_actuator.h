@@ -52,6 +52,14 @@ int8_t ModActuator_Init(ModActuator_Context_t *ctx);
 int8_t ModActuator_SetGripper(ModActuator_Context_t *ctx, uint8_t percent);
 
 /**
+ * @brief  Directly control the gripper servo angle.
+ * @param  ctx     Pointer to the actuator context.
+ * @param  degree  Target servo angle, 0..180 degrees.
+ * @retval MOD_ACTUATOR_OK on success. MOD_ACTUATOR_WARN_JAM if limit triggered.
+ */
+int8_t ModActuator_SetGripperAngle(ModActuator_Context_t *ctx, uint8_t degree);
+
+/**
  * @brief  Control the roll attitude of the end-effector.
  * @param  ctx    Pointer to the actuator context.
  * @param  degree Target roll angle (0-180 degrees).

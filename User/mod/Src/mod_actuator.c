@@ -61,6 +61,23 @@ int8_t ModActuator_SetGripper(ModActuator_Context_t *ctx, uint8_t percent)
     return MOD_ACTUATOR_OK;
 }
 
+int8_t ModActuator_SetGripperAngle(ModActuator_Context_t *ctx, uint8_t degree)
+{
+    if (ctx == NULL) {
+        return MOD_ACTUATOR_ERR_NULL;
+    }
+
+    int8_t ret = DrvServo_SetAngle(&ctx->servo_gripper, degree);
+
+    if (ret == DRV_SERVO_LIMIT_REACHED) {
+        return MOD_ACTUATOR_WARN_JAM;
+    } else if (ret != DRV_SERVO_OK) {
+        return MOD_ACTUATOR_ERR_NULL;
+    }
+
+    return MOD_ACTUATOR_OK;
+}
+
 int8_t ModActuator_SetRoll(ModActuator_Context_t *ctx, uint8_t degree)
 {
     if (ctx == NULL) {

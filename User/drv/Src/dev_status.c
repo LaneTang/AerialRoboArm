@@ -16,3 +16,8 @@ void DEV_Status_LED_ToggleLed(void)
     // 2. 将反转后的状态写入硬件管脚 (L1 Write)
     BSP_GPIO_Write(BSP_GPIO_LED_STATUS, !current_state);
 }
+
+void DevStatus_LedSet(bool on)
+{
+    BSP_GPIO_Write(BSP_GPIO_LED_STATUS, on);
+}

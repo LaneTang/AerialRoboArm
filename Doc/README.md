@@ -11,6 +11,7 @@ This directory contains the curated documentation for the AerialRoboArm electric
 | [design/00_SYSTEM_CONSTITUTION.md](./design/00_SYSTEM_CONSTITUTION.md) | Top-level project identity, system boundary, and design principles. |
 | [design/01_RUNTIME_ARCHITECTURE.md](./design/01_RUNTIME_ARCHITECTURE.md) | Runtime architecture, frequency domains, task organization, and data flow. |
 | [hardware/pinmap.md](./hardware/pinmap.md) | STM32 pin assignment and external wiring reference. |
+| [hardware/cubemx-demo-v7-checklist.md](./hardware/cubemx-demo-v7-checklist.md) | CubeMX step-by-step checklist for `demo_v7` real ST3215 bring-up day. |
 | [demo/final-demo.md](./demo/final-demo.md) | Final `demo_v6` demo/testbench scope and media entry points. |
 
 ## Directory Layout

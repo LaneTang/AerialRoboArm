@@ -74,4 +74,11 @@ bool TaskRc_IsInitialized(void);
  */
 AraStatus_t TaskRc_CopyRawChannels(uint16_t *p_out_channels, uint8_t out_count);
 
+/**
+ * @brief  Reseed CH1 incremental accumulator to a known angle.
+ * @note   Call when exiting force mode to prevent the incremental target
+ *         from jumping away from the servo's current physical position.
+ */
+void TaskRc_ReseedIncremental(int16_t current_deg);
+
 #endif /* TASK_RC_H */

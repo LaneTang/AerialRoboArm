@@ -1,549 +1,341 @@
 /**
  * @file task_motion.c
- * @brief Single-axis motion execution service for the BLDC folding-arm axis (L4).
- * @note  Strictly C99. No RTOS dependencies.
- *        This revision intentionally removes the old demo/business auto-flow
- *        and exposes a command-driven execution kernel based on ext_raw.
+ * @brief FSUS servo proxy with Mock fallback.
  */
 
 #include "task_motion.h"
-#include "bsp_pwm.h"
-#include <stddef.h>
+#include "bsp_uart.h"
+#include "stm32f1xx_hal.h"
+#include "cmsis_os2.h"
 
-/* ============================================================================
- * 1. Internal Configuration Constants
- * ========================================================================== */
+#include <string.h>
 
-/**
- * @brief Number of motor pole pairs for the selected 2808 BLDC motor.
- */
-#define MOTION_MOTOR_POLE_PAIRS              (7U)
+/* =============================================================================
+ * Internal state
+ * ============================================================================= */
 
-/**
- * @brief Number of 1kHz ticks used to prime the encoder DMA pipeline at boot.
- */
-#define MOTION_SENSOR_PRIME_TICKS            (20U)
+/* Last-sent target tracking for change detection. */
+static float    s_last_target_deg     = -999.0f;
+static bool     s_torque_active       = false;
 
-/**
- * @brief Fixed D-axis alignment voltage used during FOC electrical alignment.
- * @note  Q15 format. ~15% full-scale voltage.
- */
-#define MOTION_ALIGN_VOLTAGE_D_Q15           (4915)
+#if TASK_MOTION_USE_MOCK
+/* Mock-mode servo simulator */
+static float    s_mock_pos_deg        = 0.0f;
+static float    s_mock_target_deg     = 0.0f;
+static bool     s_mock_torque_on      = false;
+static uint32_t s_mock_last_tick_ms   = 0U;
 
-/**
- * @brief Time to hold the fixed alignment vector.
- */
-#define MOTION_ALIGN_DURATION_TICKS          (500U)
+#define MOCK_SLEW_DEG_PER_SEC   (130.0f)
+#endif
 
-/**
- * @brief Full-scale ext_raw error used to normalize PID input to Q15.
- */
-#define MOTION_PID_ERR_FULL_SCALE_EXT_RAW    (1024)
+/* =============================================================================
+ * Helpers
+ * ============================================================================= */
 
-/**
- * @brief Closed-loop q-axis voltage limit.
- * @note  Q15 format. ~25% full-scale voltage.
- */
-#define MOTION_CLOSED_LOOP_UQ_LIMIT_Q15      (8192)
-
-/**
- * @brief Position-loop proportional gain in Q8.8 format.
- * @note  384 = 1.5
- */
-#define MOTION_PID_POS_KP_Q8_8               (384)
-
-/**
- * @brief Position-loop integral gain in Q8.8 format.
- */
-#define MOTION_PID_POS_KI_Q8_8               (0)
-
-/**
- * @brief Position-loop derivative gain in Q8.8 format.
- */
-#define MOTION_PID_POS_KD_Q8_8               (0)
-
-/**
- * @brief Maximum integral accumulator magnitude for the position PID.
- */
-#define MOTION_PID_INT_MAX                   (131072L)
-
-/**
- * @brief ext_raw error threshold considered "target reached".
- */
-#define MOTION_TARGET_REACHED_THD_EXT_RAW    (12)
-
-/* ============================================================================
- * 2. Static Context Allocation
- * ========================================================================== */
-
-/**
- * @brief Singleton runtime context for the motion service.
- */
-static TaskMotion_Context_t s_motion_ctx;
-
-/* ============================================================================
- * 3. Private Helper Functions
- * ========================================================================== */
-
-/**
- * @brief  Compute absolute value of a signed 32-bit integer.
- * @param  value Input value.
- * @return Absolute value.
- */
-static int32_t Motion_Abs32(int32_t value)
+static float map_angle_to_fsus(float deg)
 {
-    return (value >= 0) ? value : (-value);
+    /* Whole stack now operates in the FSUS-native signed -180..+180 domain.
+     * This helper only enforces hardware range; no wrap/translation needed. */
+    if (deg > FSUS_ANGLE_MAX_DEG)       return FSUS_ANGLE_MAX_DEG;
+    if (deg < FSUS_ANGLE_MIN_DEG)       return FSUS_ANGLE_MIN_DEG;
+    return deg;
 }
 
 /**
- * @brief  Wrap an arbitrary signed angle into the AS5600 raw domain [0, 4095].
- * @param  angle Input angle in extended integer domain.
- * @return Wrapped raw-angle value.
+ * @brief FSUS transaction: send, then sync on response header 0x05 0x1C.
+ * @param tx_buf    Encoded request frame.
+ * @param tx_len    Request length.
+ * @param rx_buf    Response buffer (>= FSUS_RX_BUF_SIZE).
+ * @param timeout_ms Max wait.
+ * @return Total response bytes received, or 0 on timeout.
  */
-static uint16_t Motion_WrapRawAngle(int32_t angle)
+static uint16_t fsus_transact(const uint8_t *tx_buf, uint16_t tx_len,
+                              uint8_t *rx_buf, uint32_t timeout_ms)
 {
-    while (angle < 0) {
-        angle += 4096;
+    /* Drop stale bytes before every request. A half-old response in the ring
+     * buffer would otherwise look like a valid but unrelated servo reply. */
+    BSP_UART_Fsus_Flush();
+    BSP_UART_Fsus_Send(tx_buf, tx_len);
+
+    uint32_t deadline = HAL_GetTick() + timeout_ms;
+    uint16_t total = 0U;
+
+    /* 1. Collect enough bytes to identify the response and read SIZE. */
+    while (total < 5U) {
+        total += BSP_UART_Fsus_Recv(&rx_buf[total], (uint16_t)(5U - total));
+        if (total >= 5U) break;
+        if (HAL_GetTick() > deadline) return 0U;
+        osDelay(1U);   /* yield so lower-prio tasks (housekeeping/IWDG) run */
     }
 
-    while (angle >= 4096) {
-        angle -= 4096;
-    }
-
-    return (uint16_t)angle;
-}
-
-/**
- * @brief  Clamp ext_raw into the valid calibrated stroke range.
- * @param  ext_raw Input extension coordinate.
- * @return Clamped extension coordinate.
- */
-static int32_t Motion_ClampExtRaw(int32_t ext_raw)
-{
-    if (ext_raw < MOTION_EXT_MIN_RAW) {
-        return MOTION_EXT_MIN_RAW;
-    }
-
-    if (ext_raw > MOTION_EXT_MAX_RAW) {
-        return MOTION_EXT_MAX_RAW;
-    }
-
-    return ext_raw;
-}
-
-/**
- * @brief  Calculate rotational velocity with wrap-around handling.
- * @param  curr Current AS5600 raw angle.
- * @param  prev Previous AS5600 raw angle.
- * @return Delta counts per millisecond.
- */
-static int16_t Motion_CalcVelocity(uint16_t curr, uint16_t prev)
-{
-    int32_t diff = (int32_t)curr - (int32_t)prev;
-
-    if (diff > 2048) {
-        diff -= 4096;
-    } else if (diff < -2048) {
-        diff += 4096;
-    }
-
-    return (int16_t)diff;
-}
-
-/**
- * @brief  Convert ext_raw position error into Q15 with saturation.
- * @param  error_ext_raw Signed ext_raw error.
- * @return Q15-normalized error.
- */
-static int16_t Motion_ExtErrorToQ15(int32_t error_ext_raw)
-{
-    int32_t scaled;
-
-    if (error_ext_raw >= MOTION_PID_ERR_FULL_SCALE_EXT_RAW) {
-        return (int16_t)32767;
-    }
-
-    if (error_ext_raw <= (-MOTION_PID_ERR_FULL_SCALE_EXT_RAW)) {
-        return (int16_t)(-32768);
-    }
-
-    scaled = (error_ext_raw * 32767) / MOTION_PID_ERR_FULL_SCALE_EXT_RAW;
-
-    if (scaled > 32767) {
-        scaled = 32767;
-    } else if (scaled < -32768) {
-        scaled = -32768;
-    }
-
-    return (int16_t)scaled;
-}
-
-/**
- * @brief  Enter a new public execution state.
- * @param  new_state Target execution state.
- */
-static void Motion_SetExecState(MotionExecState_t new_state)
-{
-    if (s_motion_ctx.exec_state != new_state) {
-        s_motion_ctx.exec_state = new_state;
-        s_motion_ctx.state_ticks = 0U;
-    }
-}
-
-/**
- * @brief  Force the power stage into a safe relaxed state.
- */
-static void Motion_StopPowerStage(void)
-{
-    BSP_PWM_StopAll();
-    DrvBldc_Enable(&s_motion_ctx.motor_driver, false);
-}
-
-/**
- * @brief  Apply the latest FOC duty outputs to the power stage.
- * @return ARA_OK on success, otherwise an error code from the BLDC driver.
- */
-static AraStatus_t Motion_ApplyFocOutputs(void)
-{
-    return DrvBldc_SetDuties(&s_motion_ctx.motor_driver,
-                             s_motion_ctx.foc_algo.duty_a,
-                             s_motion_ctx.foc_algo.duty_b,
-                             s_motion_ctx.foc_algo.duty_c);
-}
-
-/**
- * @brief  Run the position loop from ext_raw error to FOC q-axis voltage.
- * @param  pos_error_ext_raw Signed ext_raw error.
- * @return Q15 torque / q-axis voltage command.
- */
-static int16_t Motion_RunPositionController(int32_t pos_error_ext_raw)
-{
-    int16_t error_q15;
-    int16_t uq_q15;
-
-    error_q15 = Motion_ExtErrorToQ15(pos_error_ext_raw);
-    uq_q15 = AlgPid_Compute(&s_motion_ctx.pos_pid, error_q15, 0);
-
-    return uq_q15;
-}
-
-/**
- * @brief  Update asynchronous encoder read pipeline health.
- * @param  trigger_status Return value from DrvAS5600_TriggerUpdate().
- */
-static void Motion_UpdateSensorHealth(AraStatus_t trigger_status)
-{
-    if ((trigger_status == ARA_OK) || (trigger_status == ARA_BUSY)) {
-        if ((s_motion_ctx.hw_status == ARA_OK) || (s_motion_ctx.hw_status == ARA_BUSY)) {
-            s_motion_ctx.hw_status = ARA_OK;
+    /* 2. Sync to response header 0x05 0x1C. If noise or stale bytes are
+     * present, slide one byte at a time until the frame boundary is aligned. */
+    while (rx_buf[0] != 0x05U || rx_buf[1] != 0x1CU) {
+        /* Shift buffer left by 1, read one more byte. */
+        for (uint16_t i = 0U; i < total - 1U; i++) {
+            rx_buf[i] = rx_buf[i + 1U];
         }
-    } else {
-        s_motion_ctx.hw_status = trigger_status;
-        Motion_SetExecState(MOTION_EXEC_ERROR);
-    }
-}
-
-/**
- * @brief  Execute one closed-loop step toward a target ext_raw.
- * @param  target_ext_raw Target extension coordinate.
- * @param  current_raw Current AS5600 raw angle.
- * @param  current_ext_raw Current extension coordinate.
- * @param  p_target_reached Output reach flag.
- */
-static void Motion_RunClosedLoopToExt(int32_t target_ext_raw,
-                                      uint16_t current_raw,
-                                      int32_t current_ext_raw,
-                                      bool *p_target_reached)
-{
-    AraStatus_t apply_status;
-    int32_t pos_error_ext_raw;
-    int16_t torque_uq;
-
-    target_ext_raw = Motion_ClampExtRaw(target_ext_raw);
-    pos_error_ext_raw = target_ext_raw - current_ext_raw;
-    torque_uq = Motion_RunPositionController(pos_error_ext_raw);
-
-    DrvBldc_Enable(&s_motion_ctx.motor_driver, true);
-    AlgFoc_Run(&s_motion_ctx.foc_algo, current_raw, torque_uq, 0);
-    apply_status = Motion_ApplyFocOutputs();
-
-    if (apply_status != ARA_OK) {
-        s_motion_ctx.hw_status = apply_status;
-        Motion_SetExecState(MOTION_EXEC_ERROR);
-        if (p_target_reached != NULL) {
-            *p_target_reached = false;
+        total--;
+        while (BSP_UART_Fsus_Recv(&rx_buf[total], 1U) == 0U) {
+            if (HAL_GetTick() > deadline) return 0U;
+            osDelay(1U);
         }
-        return;
+        total++;
     }
 
-    s_motion_ctx.hw_status = ARA_OK;
+    /* 3. Read remaining bytes. SIZE is the content length.
+     *     Frame length = header(2) + cmd(1) + size(1) + content(size) + ck(1)
+     *                  = 5 + content_size. */
+    uint8_t content_size = rx_buf[3];
+    uint16_t frame_len = (uint16_t)(5U + content_size);
+    if (frame_len > FSUS_RX_BUF_SIZE) return 0U;
 
-    if (p_target_reached != NULL) {
-        *p_target_reached = (Motion_Abs32(pos_error_ext_raw) <= MOTION_TARGET_REACHED_THD_EXT_RAW);
+    while (total < frame_len) {
+        total += BSP_UART_Fsus_Recv(&rx_buf[total], (uint16_t)(frame_len - total));
+        if (total >= frame_len) break;
+        if (HAL_GetTick() > deadline) return 0U;
+        osDelay(1U);
     }
+    return total;
 }
 
-/* ============================================================================
- * 4. Public Coordinate Mapping API
- * ========================================================================== */
+/* =============================================================================
+ * Real-servo helpers
+ * ============================================================================= */
 
-int32_t TaskMotion_MapRawToExt(uint16_t raw_angle)
+#if !TASK_MOTION_USE_MOCK
+
+static FsusParseResult_t do_stop(uint8_t mode, uint16_t power_mw)
 {
-    int32_t raw_unwrapped;
+    uint8_t tx[FSUS_TX_BUF_SIZE];
+    uint8_t rx[FSUS_RX_BUF_SIZE];
 
-    if (raw_angle < MOTION_WRAP_THRESHOLD_RAW) {
-        raw_unwrapped = (int32_t)raw_angle + 4096;
-    } else {
-        raw_unwrapped = (int32_t)raw_angle;
+    uint16_t tx_len = DrvFsus_EncodeStop(tx, TASK_MOTION_SERVO_ID, mode, power_mw);
+    if (tx_len == 0U) {
+        return FSUS_PARSE_BAD_FRAME;
     }
 
-    return raw_unwrapped - (int32_t)MOTION_HOME_RAW_CALIB;
+    /* Stop has no defined response; this is a fire-and-forget control frame.
+     * In unlock mode it releases the servo's holding torque. */
+    BSP_UART_Fsus_Flush();
+    BSP_UART_Fsus_Send(tx, tx_len);
+    return FSUS_PARSE_OK;
 }
 
-uint16_t TaskMotion_MapExtToRaw(int32_t ext_raw)
+static FsusParseResult_t do_set_angle(float    angle_deg,
+                                       float    velocity_deg_per_s,
+                                       uint16_t t_acc_ms,
+                                       uint16_t t_dec_ms,
+                                       uint16_t power_mw)
 {
-    int32_t raw_unwrapped;
+    uint8_t tx[FSUS_TX_BUF_SIZE];
+    uint8_t rx[FSUS_RX_BUF_SIZE];
 
-    ext_raw = Motion_ClampExtRaw(ext_raw);
-    raw_unwrapped = (int32_t)MOTION_HOME_RAW_CALIB + ext_raw;
-
-    return Motion_WrapRawAngle(raw_unwrapped);
+    /* FSUS expects no response for SetAngleByVelocity by default.
+     * Send and return OK — feedback is obtained via ServoMonitor. */
+    /* Encode a motion target. This updates the servo's internal target
+     * trajectory; the servo then closes the loop with its own encoder. */
+    uint16_t tx_len = DrvFsus_EncodeSetAngleByVelocity(tx, TASK_MOTION_SERVO_ID,
+                                                       angle_deg, velocity_deg_per_s,
+                                                       t_acc_ms, t_dec_ms, power_mw);
+    if (tx_len == 0U) {
+        return FSUS_PARSE_BAD_FRAME;
+    }
+    BSP_UART_Fsus_Flush();
+    BSP_UART_Fsus_Send(tx, tx_len);
+    return FSUS_PARSE_OK;
 }
 
-/* ============================================================================
- * 5. Public API Implementation
- * ========================================================================== */
+static FsusParseResult_t do_read_feedback(uint32_t        tick_ms,
+                                          FsusFeedback_t *out)
+{
+    uint8_t tx[FSUS_TX_BUF_SIZE];
+    uint8_t rx[FSUS_RX_BUF_SIZE];
+
+    /* Ask the servo to report the state measured by its internal controller:
+     * angle, voltage, current, power, temperature and status bits. */
+    uint16_t tx_len = DrvFsus_EncodeServoMonitor(tx, TASK_MOTION_SERVO_ID);
+    if (tx_len == 0U) {
+        return FSUS_PARSE_BAD_FRAME;
+    }
+
+    uint16_t rx_len = fsus_transact(tx, tx_len, rx, FSUS_IO_TIMEOUT_MS);
+    if (rx_len < 5U) {
+        return FSUS_PARSE_TIMEOUT;
+    }
+    /* Convert raw UART bytes into a typed feedback struct for the FSM. */
+    return DrvFsus_ParseServoMonitor(rx, rx_len, TASK_MOTION_SERVO_ID, tick_ms, out);
+}
+
+#endif /* !TASK_MOTION_USE_MOCK */
+
+/* =============================================================================
+ * Public API
+ * ============================================================================= */
 
 void TaskMotion_Init(void)
 {
-    AraStatus_t init_status;
+    s_last_target_deg = -999.0f;
+    s_torque_active   = false;
 
-    s_motion_ctx.exec_state = MOTION_EXEC_UNINIT;
-    s_motion_ctx.active_cmd = MOTION_CMD_IDLE;
-    s_motion_ctx.uptime_ticks = 0U;
-    s_motion_ctx.state_ticks = 0U;
-
-    s_motion_ctx.is_foc_aligned = false;
-    s_motion_ctx.foc_zero_offset = 0U;
-    s_motion_ctx.home_raw = MOTION_HOME_RAW_CALIB;
-    s_motion_ctx.wrap_threshold_raw = MOTION_WRAP_THRESHOLD_RAW;
-    s_motion_ctx.hold_target_ext_raw = 0;
-    s_motion_ctx.track_target_ext_raw = 0;
-
-    s_motion_ctx.hw_status = ARA_OK;
-    s_motion_ctx.prev_angle_raw = 0U;
-
-    init_status = DrvAS5600_Init(&s_motion_ctx.enc_driver, BSP_I2C_MOTION, NULL);
-    if (init_status != ARA_OK) {
-        s_motion_ctx.hw_status = init_status;
-        s_motion_ctx.exec_state = MOTION_EXEC_ERROR;
-    } else {
-        s_motion_ctx.exec_state = MOTION_EXEC_IDLE;
-    }
-
-    DrvBldc_Init(&s_motion_ctx.motor_driver, BSP_GPIO_MOTOR_EN);
-
-    AlgFoc_Init(&s_motion_ctx.foc_algo, MOTION_MOTOR_POLE_PAIRS, BSP_PWM_MAX_DUTY);
-
-    AlgPid_Init(&s_motion_ctx.pos_pid);
-    AlgPid_SetGains(&s_motion_ctx.pos_pid,
-                    MOTION_PID_POS_KP_Q8_8,
-                    MOTION_PID_POS_KI_Q8_8,
-                    MOTION_PID_POS_KD_Q8_8,
-                    MOTION_CLOSED_LOOP_UQ_LIMIT_Q15,
-                    MOTION_PID_INT_MAX);
-
-    if (s_motion_ctx.exec_state != MOTION_EXEC_ERROR) {
-        init_status = DrvAS5600_TriggerUpdate(&s_motion_ctx.enc_driver);
-        if ((init_status != ARA_OK) && (init_status != ARA_BUSY)) {
-            s_motion_ctx.hw_status = init_status;
-            s_motion_ctx.exec_state = MOTION_EXEC_ERROR;
-        }
-    }
+#if TASK_MOTION_USE_MOCK
+    s_mock_pos_deg       = 0.0f;
+    s_mock_target_deg    = 0.0f;
+    s_mock_torque_on     = false;
+    s_mock_last_tick_ms  = 0U;
+#endif
 }
 
-void TaskMotion_Update(const MotionCmd_t *p_cmd, MotionState_t *p_state)
-{
-    uint16_t current_raw;
-    int16_t current_vel;
-    int32_t current_ext_raw;
-    bool target_reached = false;
-    int32_t active_target_ext_raw = 0;
-    AraStatus_t trigger_status;
+#if TASK_MOTION_USE_MOCK
 
-    if ((p_cmd == NULL) || (p_state == NULL)) {
+void TaskMotion_Update(const MotionCmd_t *cmd,
+                       uint32_t           tick_ms,
+                       MotionState_t     *state)
+{
+    if ((cmd == NULL) || (state == NULL)) {
         return;
     }
+    memset(state, 0, sizeof(*state));
 
-    s_motion_ctx.uptime_ticks++;
-    s_motion_ctx.state_ticks++;
+    if (s_mock_last_tick_ms == 0U) {
+        s_mock_last_tick_ms = tick_ms;
+    }
+    uint32_t dt_ms = tick_ms - s_mock_last_tick_ms;
+    if (dt_ms > 500U) dt_ms = 500U;
+    s_mock_last_tick_ms = tick_ms;
 
-    current_raw = DrvAS5600_GetRawAngle(&s_motion_ctx.enc_driver);
-    current_vel = Motion_CalcVelocity(current_raw, s_motion_ctx.prev_angle_raw);
-    current_ext_raw = TaskMotion_MapRawToExt(current_raw);
-    s_motion_ctx.prev_angle_raw = current_raw;
-
-    trigger_status = DrvAS5600_TriggerUpdate(&s_motion_ctx.enc_driver);
-    Motion_UpdateSensorHealth(trigger_status);
-
-    if (s_motion_ctx.uptime_ticks < MOTION_SENSOR_PRIME_TICKS) {
-        Motion_StopPowerStage();
-        Motion_SetExecState(MOTION_EXEC_IDLE);
-    } else if (p_cmd->cmd == MOTION_CMD_ESTOP) {
-        Motion_StopPowerStage();
-        s_motion_ctx.hw_status = ARA_ERROR;
-        Motion_SetExecState(MOTION_EXEC_ERROR);
-    } else if (s_motion_ctx.exec_state == MOTION_EXEC_ERROR) {
-        Motion_StopPowerStage();
-
-        if (p_cmd->cmd == MOTION_CMD_IDLE) {
-            s_motion_ctx.hw_status = ARA_OK;
-            Motion_SetExecState(MOTION_EXEC_IDLE);
-        }
-    } else {
-        switch (p_cmd->cmd)
-        {
-            case MOTION_CMD_IDLE:
-            {
-                Motion_StopPowerStage();
-                Motion_SetExecState(MOTION_EXEC_IDLE);
-                s_motion_ctx.hw_status = ARA_OK;
-                break;
-            }
-
-            case MOTION_CMD_ALIGN:
-            {
-                AraStatus_t apply_status;
-
-                if (s_motion_ctx.exec_state != MOTION_EXEC_ALIGNING) {
-                    s_motion_ctx.is_foc_aligned = false;
-                    s_motion_ctx.foc_zero_offset = 0U;
-                    AlgPid_Reset(&s_motion_ctx.pos_pid);
-                    Motion_SetExecState(MOTION_EXEC_ALIGNING);
-                }
-
-                DrvBldc_Enable(&s_motion_ctx.motor_driver, true);
-
-                AlgFoc_Run(&s_motion_ctx.foc_algo, 0U, 0, MOTION_ALIGN_VOLTAGE_D_Q15);
-                apply_status = Motion_ApplyFocOutputs();
-
-                if (apply_status != ARA_OK) {
-                    s_motion_ctx.hw_status = apply_status;
-                    Motion_SetExecState(MOTION_EXEC_ERROR);
-                    break;
-                }
-
-                s_motion_ctx.hw_status = ARA_OK;
-
-                if (s_motion_ctx.state_ticks >= MOTION_ALIGN_DURATION_TICKS) {
-                    s_motion_ctx.foc_zero_offset = current_raw;
-                    AlgFoc_SetZeroOffset(&s_motion_ctx.foc_algo, s_motion_ctx.foc_zero_offset);
-                    s_motion_ctx.is_foc_aligned = true;
-                    s_motion_ctx.hold_target_ext_raw = current_ext_raw;
-                    AlgPid_Reset(&s_motion_ctx.pos_pid);
-                    Motion_SetExecState(MOTION_EXEC_HOLDING);
-                    target_reached = true;
-                    active_target_ext_raw = s_motion_ctx.hold_target_ext_raw;
-                }
-                break;
-            }
-
-            case MOTION_CMD_HOLD:
-            {
-                if (!s_motion_ctx.is_foc_aligned) {
-                    Motion_StopPowerStage();
-                    Motion_SetExecState(MOTION_EXEC_IDLE);
-                    s_motion_ctx.hw_status = ARA_OK;
-                    break;
-                }
-
-                if ((s_motion_ctx.active_cmd != MOTION_CMD_HOLD) ||
-                    (s_motion_ctx.exec_state != MOTION_EXEC_HOLDING))
-                {
-                    s_motion_ctx.hold_target_ext_raw = current_ext_raw;
-                    AlgPid_Reset(&s_motion_ctx.pos_pid);
-                    Motion_SetExecState(MOTION_EXEC_HOLDING);
-                }
-
-                active_target_ext_raw = s_motion_ctx.hold_target_ext_raw;
-                Motion_RunClosedLoopToExt(active_target_ext_raw,
-                                          current_raw,
-                                          current_ext_raw,
-                                          &target_reached);
-                break;
-            }
-
-            case MOTION_CMD_GOTO_HOME:
-            {
-                if (!s_motion_ctx.is_foc_aligned) {
-                    Motion_StopPowerStage();
-                    Motion_SetExecState(MOTION_EXEC_IDLE);
-                    s_motion_ctx.hw_status = ARA_OK;
-                    break;
-                }
-
-                if ((s_motion_ctx.active_cmd != MOTION_CMD_GOTO_HOME) ||
-                    (s_motion_ctx.exec_state != MOTION_EXEC_TRACKING))
-                {
-                    s_motion_ctx.track_target_ext_raw = 0;
-                    AlgPid_Reset(&s_motion_ctx.pos_pid);
-                    Motion_SetExecState(MOTION_EXEC_TRACKING);
-                }
-
-                active_target_ext_raw = s_motion_ctx.track_target_ext_raw;
-                Motion_RunClosedLoopToExt(active_target_ext_raw,
-                                          current_raw,
-                                          current_ext_raw,
-                                          &target_reached);
-                break;
-            }
-
-            case MOTION_CMD_GOTO_EXT:
-            {
-                if (!s_motion_ctx.is_foc_aligned) {
-                    Motion_StopPowerStage();
-                    Motion_SetExecState(MOTION_EXEC_IDLE);
-                    s_motion_ctx.hw_status = ARA_OK;
-                    break;
-                }
-
-                if ((s_motion_ctx.active_cmd != MOTION_CMD_GOTO_EXT) ||
-                    (s_motion_ctx.track_target_ext_raw != Motion_ClampExtRaw(p_cmd->target_ext_raw)) ||
-                    (s_motion_ctx.exec_state != MOTION_EXEC_TRACKING))
-                {
-                    s_motion_ctx.track_target_ext_raw = Motion_ClampExtRaw(p_cmd->target_ext_raw);
-                    AlgPid_Reset(&s_motion_ctx.pos_pid);
-                    Motion_SetExecState(MOTION_EXEC_TRACKING);
-                }
-
-                active_target_ext_raw = s_motion_ctx.track_target_ext_raw;
-                Motion_RunClosedLoopToExt(active_target_ext_raw,
-                                          current_raw,
-                                          current_ext_raw,
-                                          &target_reached);
-                break;
-            }
-
-            case MOTION_CMD_ESTOP:
-            default:
-            {
-                Motion_StopPowerStage();
-                s_motion_ctx.hw_status = ARA_ERROR;
-                Motion_SetExecState(MOTION_EXEC_ERROR);
-                break;
-            }
-        }
+    s_mock_torque_on = cmd->torque_on;
+    if (cmd->torque_on) {
+        s_mock_target_deg = map_angle_to_fsus(cmd->target_angle_deg);
     }
 
-    s_motion_ctx.active_cmd = p_cmd->cmd;
+    /* First-order tracker */
+    float err       = s_mock_target_deg - s_mock_pos_deg;
+    float max_delta = MOCK_SLEW_DEG_PER_SEC * (float)(int32_t)dt_ms / 1000.0f;
+    if (max_delta < 0.1f) max_delta = 0.1f;
 
-    p_state->exec_state = s_motion_ctx.exec_state;
-    p_state->is_aligned = s_motion_ctx.is_foc_aligned;
-    p_state->home_raw = s_motion_ctx.home_raw;
-    p_state->raw_angle = current_raw;
-    p_state->ext_raw = current_ext_raw;
-    p_state->velocity_raw_per_ms = current_vel;
-    p_state->target_ext_raw = active_target_ext_raw;
-    p_state->target_reached = target_reached;
-    p_state->status = s_motion_ctx.hw_status;
+    float delta;
+    if (err > max_delta)        delta =  max_delta;
+    else if (err < -max_delta)  delta = -max_delta;
+    else                        delta =  err;
+
+    s_mock_pos_deg += delta;
+
+    /* Simulated feedback */
+    FsusFeedback_t fb;
+    memset(&fb, 0, sizeof(fb));
+    fb.servo_id      = TASK_MOTION_SERVO_ID;
+    fb.angle_deg     = s_mock_pos_deg;
+    fb.voltage_mv    = 7400;
+    fb.current_ma    = 0;
+    fb.power_mw      = 0;
+    fb.temp_raw      = 3000;
+    fb.status        = 0;
+    fb.circle_count  = 0;
+    fb.timestamp_ms  = tick_ms;
+
+    state->last_write_result = FSUS_PARSE_OK;
+    state->last_read_result  = FSUS_PARSE_OK;
+    state->feedback          = fb;
+    state->feedback_valid    = true;
+    state->servo_online      = true;
+    state->is_moving         = (delta > 0.5f || delta < -0.5f);
+    state->is_stalled        = false;
+    state->is_overload       = false;
 }
+
+#else /* ============ Real-servo path (FSUS) ============ */
+
+void TaskMotion_Update(const MotionCmd_t *cmd,
+                       uint32_t           tick_ms,
+                       MotionState_t     *state)
+{
+    if ((cmd == NULL) || (state == NULL)) {
+        return;
+    }
+    memset(state, 0, sizeof(*state));
+
+#if TASK_MOTION_SKIP_PING_FOR_BENCH
+    /* Bench mode short-circuit: HX8 / UC01 not powered. Pretend the main
+     * arm is online and silently swallow any motion command so the rest of
+     * the FSM (arbiter, manipulator) is allowed to drive PA0/PA1 PTK
+     * end-effectors. We do NOT touch the FSUS bus here. */
+    (void)cmd;
+    state->last_write_result = FSUS_PARSE_OK;
+    state->last_read_result  = FSUS_PARSE_OK;
+    state->feedback.servo_id     = TASK_MOTION_SERVO_ID;
+    state->feedback.angle_deg    = 0.0f;
+    state->feedback.timestamp_ms = tick_ms;
+    state->feedback_valid    = true;
+    state->servo_online      = true;
+    state->is_moving         = false;
+    state->is_stalled        = false;
+    state->is_overload       = false;
+    return;
+#endif
+
+    float target_deg = map_angle_to_fsus(cmd->target_angle_deg);
+
+    /* --- Torque transition ---
+     * Protocol-level meaning:
+     *   false -> Stop(unlock), release holding torque
+     *   true  -> send position command, servo holds/follows target internally */
+    if (cmd->torque_on != s_torque_active) {
+        if (cmd->torque_on) {
+            /* Enable: send motion command to lock at target. */
+            state->last_write_result = do_set_angle(target_deg,
+                                                    cmd->velocity_deg_per_s,
+                                                    cmd->t_acc_ms,
+                                                    cmd->t_dec_ms,
+                                                    cmd->power_mw);
+            if (state->last_write_result == FSUS_PARSE_OK) {
+                s_torque_active   = true;
+                s_last_target_deg = target_deg;
+            }
+        } else {
+            /* Disable: stop and unlock. */
+            state->last_write_result = do_stop(FSUS_STOP_MODE_UNLOCK, 0U);
+            s_torque_active   = false;
+            s_last_target_deg = -999.0f;
+        }
+    } else if (cmd->torque_on) {
+        /* --- Target change detection ---
+         * Avoid spamming the bus with the same target every control tick.
+         * The servo keeps running its internal closed loop after one command. */
+        float diff = target_deg - s_last_target_deg;
+        if (diff < 0.0f) diff = -diff;
+        bool changed = (diff > 0.5f) || cmd->force_update;
+
+        if (changed) {
+            state->last_write_result = do_set_angle(target_deg,
+                                                    cmd->velocity_deg_per_s,
+                                                    cmd->t_acc_ms,
+                                                    cmd->t_dec_ms,
+                                                    cmd->power_mw);
+            if (state->last_write_result == FSUS_PARSE_OK) {
+                s_last_target_deg = target_deg;
+            }
+        } else {
+            state->last_write_result = FSUS_PARSE_OK;
+        }
+    } else {
+        state->last_write_result = FSUS_PARSE_OK;
+    }
+
+    /* --- Always read feedback ---
+     * Command frames tell the servo what to do; monitor frames tell us what
+     * actually happened inside the servo controller. */
+    state->last_read_result = do_read_feedback(tick_ms, &state->feedback);
+    if (state->last_read_result == FSUS_PARSE_OK) {
+        state->feedback_valid = true;
+        state->servo_online   = true;
+
+        /* Motion classification from servo status byte. */
+        uint8_t st = state->feedback.status;
+        state->is_stalled  = ((st >> 2) & 0x01U) != 0U;  /* BIT2 = stall */
+        state->is_overload = (st != 0U);                   /* any fault */
+        state->is_moving   = !state->is_stalled;           /* rough */
+    }
+}
+
+#endif /* TASK_MOTION_USE_MOCK */

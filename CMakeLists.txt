@@ -1,7 +1,7 @@
-#THIS FILE IS AUTO GENERATED FROM THE TEMPLATE! DO NOT CHANGE!
+#此文件从模板自动生成! 请勿更改!
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_VERSION 1)
-cmake_minimum_required(VERSION 3.28)
+cmake_minimum_required(VERSION 4.0)
 
 # specify cross-compilers and tools
 set(CMAKE_C_COMPILER arm-none-eabi-gcc)
@@ -28,10 +28,12 @@ set(CMAKE_C_STANDARD 11)
 
 add_compile_options(-mcpu=cortex-m3 -mthumb -mthumb-interwork)
 add_compile_options(-ffunction-sections -fdata-sections -fno-common -fmessage-length=0)
+# newlib-nano: drop ~7-8 KB of float / long-long printf code that nothing
+# in User/ actually uses. Must be passed at compile *and* link time.
+add_compile_options(--specs=nano.specs)
 
 # uncomment to mitigate c++17 absolute addresses warnings
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-register")
-set(CMAKE_BUILD_TYPE MinSizeRel CACHE STRING "Build type" FORCE)
 
 # Enable assembler files preprocessing
 add_compile_options($<$<COMPILE_LANGUAGE:ASM>:-x$<SEMICOLON>assembler-with-cpp>)
@@ -50,23 +52,25 @@ else ()
     add_compile_options(-Og -g)
 endif ()
 
-include_directories(Core/Inc
-        User/app/Inc
-        User/task/Inc
-        User/mod/Inc
-        User/drv/Inc
-        User/bsp/Inc
-        User/global/Inc
-        Drivers/STM32F1xx_HAL_Driver/Inc/Legacy Drivers/STM32F1xx_HAL_Driver/Inc Middlewares/Third_Party/FreeRTOS/Source/include Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM3 Drivers/CMSIS/Device/ST/STM32F1xx/Include Drivers/CMSIS/Include)
+include_directories(Core/Inc Drivers/STM32F1xx_HAL_Driver/Inc/Legacy Drivers/STM32F1xx_HAL_Driver/Inc Middlewares/Third_Party/FreeRTOS/Source/include Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM3 Drivers/CMSIS/Device/ST/STM32F1xx/Include Drivers/CMSIS/Include
+        # ===== User module include roots =====
+        User/global/Inc User/bsp/Inc User/drv/Inc User/mod/Inc User/task/Inc User/app/Inc)
 
 add_definitions(-DDEBUG -DUSE_HAL_DRIVER -DSTM32F103xB)
 
 file(GLOB_RECURSE SOURCES "Core/*.*" "Middlewares/*.*" "Drivers/*.*" "User/*.*")
 
+# ===== demo_v7: exclude legacy code from build =====
+list(FILTER SOURCES EXCLUDE REGEX ".*test_console_drvtest\\.c$")
+list(FILTER SOURCES EXCLUDE REGEX ".*app_threads\\.(c|h)$")
+list(FILTER SOURCES EXCLUDE REGEX ".*app_testbench\\.(c|h)$")
+list(FILTER SOURCES EXCLUDE REGEX ".*tests/.*$")
+
 set(LINKER_SCRIPT ${CMAKE_SOURCE_DIR}/STM32F103C8TX_FLASH.ld)
 
 add_link_options(-Wl,-gc-sections,--print-memory-usage,-Map=${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map)
 add_link_options(-mcpu=cortex-m3 -mthumb -mthumb-interwork)
+add_link_options(--specs=nano.specs)
 add_link_options(-T ${LINKER_SCRIPT})
 
 add_executable(${PROJECT_NAME}.elf ${SOURCES} ${LINKER_SCRIPT})

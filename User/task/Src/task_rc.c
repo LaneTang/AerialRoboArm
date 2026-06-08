@@ -234,3 +234,9 @@ AraStatus_t TaskRc_CopyRawChannels(uint16_t *p_out_channels, uint8_t out_count)
 
     return DrvElrs_CopyChannels(&s_rc_ctx.elrs_driver, p_out_channels, out_count);
 }
+
+void TaskRc_ReseedIncremental(int16_t current_deg)
+{
+    if (!s_rc_ctx.is_initialized) return;
+    ModRcSemantic_ReseedIncremental(&s_rc_ctx.semantic_logic, current_deg);
+}

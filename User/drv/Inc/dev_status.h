@@ -17,4 +17,10 @@
  */
 void DEV_Status_LED_ToggleLed(void);
 
+/**
+ * @brief Drive the system status LED to a specific state.
+ * @param on  true to turn LED on, false to turn it off.
+ */
+void DevStatus_LedSet(bool on);
+
 #endif // DEV_STATUS_H

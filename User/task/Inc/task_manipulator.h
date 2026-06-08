@@ -1,13 +1,14 @@
 /**
  * @file task_manipulator.h
- * @brief Demo-oriented manipulator brain and state machine runnable (L4).
- * @note  Executes the 50Hz decision logic for the folding-arm BLDC axis and
- *        end-effector servos. This revision is aligned to the current demo goal:
- *        - MANUAL mode directly controls all actuators from RC semantics.
- *        - AUTO mode is a deterministic fixed demo flow.
- *        - Vision input is removed from this task.
- *        - The BLDC target remains expressed as AS5600 raw angle for compatibility
- *          with the current Motion / DataHub contract.
+ * @brief Manipulator FSM runnable (L4).
+ *
+ * The arbiter has already collapsed RC + Vision + servo state into one
+ * unified intent. The manipulator FSM is now a thin behaviour layer that:
+ *   - Translates ArbiterOutput into MotionCmd for task_motion.
+ *   - Issues end-effector (gripper / roll) commands via mod_actuator.
+ *   - Tracks demo state transitions (idle / manual / auto-pick / auto-done).
+ *
+ * No DataHub access. All inputs explicit. Pure-C state machine.
  */
 
 #ifndef TASK_MANIPULATOR_H
@@ -15,52 +16,51 @@
 
 #include "ara_def.h"
 #include "datahub.h"
+#include "mod_actuator.h"
+#include "task_arbiter.h"
+#include "task_motion.h"
 
-/**
- * @brief Manipulator top-level demo state machine.
- */
+/* ============================================================================
+ * State enum
+ * ============================================================================= */
+
 typedef enum {
-    MANIP_STATE_STARTUP_PARK = 0,  /**< Startup park-hold after motion calibration. */
-    MANIP_STATE_IDLE,              /**< Safe demo idle / park-hold state. */
-    MANIP_STATE_MANUAL,            /**< Direct operator control from RC. */
-    MANIP_STATE_AUTO_MOVE_PICK,    /**< AUTO: move joint to fixed pick angle. */
-    MANIP_STATE_AUTO_HOLD_VERIFY,  /**< AUTO: verify joint stays within tolerance. */
-    MANIP_STATE_AUTO_GRAB_CLOSE,   /**< AUTO: close gripper after hold verification. */
-    MANIP_STATE_AUTO_RETRACT,      /**< AUTO: retract joint to fixed demo angle. */
-    MANIP_STATE_AUTO_DONE,         /**< AUTO: final hold state. */
-    MANIP_STATE_ERROR_SAFE         /**< Emergency-safe latched state. */
+    MANIP_STATE_BOOT = 0,        /**< Waiting for first servo-online tick. */
+    MANIP_STATE_IDLE,            /**< Safe idle, torque off. */
+    MANIP_STATE_MANUAL,          /**< RC direct control. */
+    MANIP_STATE_AUTO_GO,         /**< AUTO: traversing to vision target. */
+    MANIP_STATE_AUTO_HOLD,       /**< AUTO: target reached, holding. */
+    MANIP_STATE_ERROR_SAFE       /**< Latched fault / E-Stop. */
 } ManipulatorState_t;
 
-/**
- * @brief Manipulator runnable context.
- */
 typedef struct {
-    ManipulatorState_t current_state;        /**< Current top-level state. */
-    uint32_t           state_enter_tick;     /**< 50Hz tick when current state was entered. */
-
-    uint16_t           manual_target_degree;   /**< Manual-mode joint target in mechanical degree. */
-    uint8_t            manual_gripper_percent; /**< Manual-mode gripper target, 0~100%. */
-    uint8_t            manual_roll_degree;     /**< Manual-mode roll target, 0~180 degree. */
-
-    bool               auto_start_armed;       /**< AUTO may start only after seeing a non-AUTO state first. */
+    ManipulatorState_t current_state;
+    uint32_t           state_enter_ms;
+    float              last_target_angle_deg;
+    ModActuator_Context_t actuator;
 } TaskManipulator_Context_t;
 
-/**
- * @brief  Initialize the manipulator runnable context and owned actuator module.
- * @note   Must be called before the L5 scheduler starts.
- */
+/* ============================================================================
+ * API
+ * ============================================================================= */
+
 void TaskManipulator_Init(void);
 
 /**
- * @brief  Execute one 50Hz manipulator decision step.
- * @param  p_rc_intent   Pointer to the latest RC semantic intent.
- * @param  p_motion_state Pointer to the latest motion feedback from DataHub.
- * @param  p_out_cmd     Pointer to the downlink command written toward Motion.
- * @note   The function is strictly non-blocking.
- * @note   This revision no longer depends on any vision data.
+ * @brief Run one 50 Hz manipulator step.
+ * @param arb       Arbiter decision for this tick.
+ * @param mot_state Latest motion feedback (read-only).
+ * @param tick_ms   Current tick.
+ * @param out_cmd   Output motion command for task_motion.
  */
-void TaskManipulator_Update(const RcControlData_t *p_rc_intent,
-                            const DataHub_State_t *p_motion_state,
-                            DataHub_Cmd_t *p_out_cmd);
+void TaskManipulator_Update(const ArbiterOutput_t *arb,
+                            const MotionState_t   *mot_state,
+                            uint32_t               tick_ms,
+                            MotionCmd_t           *out_cmd);
+
+/**
+ * @brief Read the current FSM state (for telemetry / DataHub publishing).
+ */
+ManipulatorState_t TaskManipulator_GetState(void);
 
 #endif /* TASK_MANIPULATOR_H */

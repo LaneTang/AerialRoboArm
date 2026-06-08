@@ -22,6 +22,14 @@
 #define MOD_RC_SB_PULSE_HOLD_MS      (150U)
 
 /**
+ * @brief CH1 incremental step: stick outside deadband triggers a step
+ *        immediately, then every STEP_INTERVAL_MS while held.
+ */
+#define MOD_RC_CH1_DEADBAND_PCT       (15)
+#define MOD_RC_CH1_STEP_INTERVAL_MS   (20U)
+#define MOD_RC_CH1_STEP_DEG           (15)
+
+/**
  * @brief CH1 threshold for entering EXTEND state.
  */
 #define MOD_RC_CH1_ENTER_EXTEND_PCT  (55)
@@ -36,13 +44,20 @@
  */
 #define MOD_RC_CH1_EXIT_HOLD_ABS_PCT (35)
 
+/**
+ * @brief CH4 gripper center deadband (raw counts). Spring-centered stick
+ *        rests around RAW_MID with mild ADC noise. ±30 raw ≈ ±3.3 deg
+ *        of stick travel — small enough to feel 1:1, large enough to
+ *        suppress visible jitter when idle.
+ */
+#define MOD_RC_CH4_CENTER_DEADBAND_RAW (30U)
+
 /* Channel Mapping Indices (CRSF array is 0-indexed) */
-#define MOD_RC_IDX_CH1 0U  /**< CH1: Stick RX axis (Arm analog intent). */
-#define MOD_RC_IDX_CH3 2U  /**< CH3: Stick LY axis (Arm analog intent). */
+#define MOD_RC_IDX_CH1 0U  /**< CH1: Stick RX axis (main arm incremental intent). */
+#define MOD_RC_IDX_CH4 3U  /**< CH4: Spring-centered gripper servo axis (isolated from CH1/CH2 cross-talk). */
 #define MOD_RC_IDX_SA  4U  /**< CH5: Mode request switch (2-pos). */
-#define MOD_RC_IDX_SE  5U  /**< CH6: Reserved / legacy input. */
 #define MOD_RC_IDX_SC  6U  /**< CH7: Gripper switch (3-pos). */
-#define MOD_RC_IDX_SF  7U  /**< CH8: Aux analog knob. */
+#define MOD_RC_IDX_SF  7U  /**< CH8: Roll attitude wheel. */
 #define MOD_RC_IDX_SB  8U  /**< CH9: System reset switch (3-pos). */
 #define MOD_RC_IDX_SD  9U  /**< CH10: E-stop switch (2-pos). */
 
@@ -67,12 +82,12 @@ typedef struct {
     uint8_t  req_mode;         /**< Requested system mode (ARA_MODE_*). */
     uint8_t  estop_state;      /**< E-stop state (ESTOP_*). */
     int16_t  ch1_percent;      /**< CH1 normalized to [-100, +100]. */
-    uint16_t aux_knob_val;     /**< SF normalized to [0, 1000]. */
+    uint16_t aux_knob_val;     /**< CH8 / SF wheel normalized to [0, 1000]. */
     bool     sys_reset_pulse;  /**< Edge-triggered SB pulse. */
 
     /* --- 新增：专门用于标定的绝对角度语义 --- */
-    uint8_t  roll_angle;       /**< 映射自 CH3，范围 [0, 180] 度 */
-    uint8_t  gripper_angle;    /**< 映射自 CH8 (SF)，范围 [0, 180] 度 */
+    uint8_t  roll_angle;       /**< Mapped from CH8 / SF wheel, [0, 180] deg. */
+    uint8_t  gripper_angle;    /**< Mapped from CH4 spring axis, [0, 180] deg. */
 } RcDebugAnalogData_t;
 
 /* =========================================================
@@ -87,6 +102,10 @@ typedef struct {
     uint8_t     sb_last_pos;       /**< Last decoded SB position. */
     uint32_t    sb_pulse_start_ms; /**< Tick when current SB pulse started. */
     bool        sb_pulse_active;   /**< Whether SB pulse is currently active. */
+
+    /* CH1 incremental stepping */
+    int16_t     inc_target_deg;    /**< Accumulated incremental target angle. */
+    uint32_t    inc_last_step_ms;  /**< Tick of last step, 0 = take first step immediately. */
 } ModRcSemantic_Context_t;
 
 /* =========================================================
@@ -127,5 +146,14 @@ AraStatus_t ModRcSemantic_ProcessDebugAnalog(ModRcSemantic_Context_t *p_ctx,
                                              const uint16_t *channels,
                                              uint32_t current_tick_ms,
                                              RcDebugAnalogData_t *out_data);
+
+/**
+ * @brief  Reseed the CH1 incremental accumulator to a known angle.
+ * @note   Call this when exiting force mode or after a mode switch to
+ *         prevent the incremental target from jumping away from the
+ *         servo's current physical position.
+ */
+void ModRcSemantic_ReseedIncremental(ModRcSemantic_Context_t *p_ctx,
+                                     int16_t current_deg);
 
 #endif /* MOD_RC_SEMANTIC_H */

@@ -18,3 +18,9 @@ cmake-build-*/
 *.bin
 *.d
 *.map
+
+# Claude AI 会话数据
+.claude/
+
+# OpenOCD 调试配置文件
+stm32f1_stlink.cfg
